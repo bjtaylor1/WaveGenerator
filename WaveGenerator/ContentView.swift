@@ -36,9 +36,13 @@ struct ContentView: View {
                         Spacer()
                         Text("\(viewModel.carrierHz, specifier: "%.0f") Hz")
                             .foregroundStyle(.secondary)
-                    }
-                    Button("Edit Carrier") {
-                        activeEditor = .carrier
+                        Button {
+                            activeEditor = .carrier
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Edit Carrier")
                     }
 
                     HStack {
@@ -46,9 +50,13 @@ struct ContentView: View {
                         Spacer()
                         Text("\(viewModel.pulseHz, specifier: "%.2f") Hz")
                             .foregroundStyle(.secondary)
-                    }
-                    Button("Edit Pulse") {
-                        activeEditor = .pulse
+                        Button {
+                            activeEditor = .pulse
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Edit Pulse")
                     }
 
                     HStack {
@@ -56,9 +64,13 @@ struct ContentView: View {
                         Spacer()
                         Text("\(viewModel.wetness, specifier: "%.2f")")
                             .foregroundStyle(.secondary)
-                    }
-                    Button("Edit Wetness") {
-                        activeEditor = .wetness
+                        Button {
+                            activeEditor = .wetness
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Edit Wetness")
                     }
 
                     if viewModel.isQueueSaturated {
