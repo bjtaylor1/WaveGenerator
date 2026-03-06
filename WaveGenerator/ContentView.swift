@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct ContentView: View {
@@ -94,6 +95,7 @@ struct ContentView: View {
                     unit: "Hz",
                     sliderRange: 200...1200,
                     step: 1,
+                    nudgeStep: 1,
                     initialValue: viewModel.carrierHz,
                     displayedValueFormat: "%.0f",
                     viewModel: viewModel
@@ -111,6 +113,7 @@ struct ContentView: View {
                     unit: "Hz",
                     sliderRange: 0...20,
                     step: 0.01,
+                    nudgeStep: 0.01,
                     initialValue: viewModel.pulseHz,
                     displayedValueFormat: "%.2f",
                     viewModel: viewModel
@@ -128,6 +131,7 @@ struct ContentView: View {
                     unit: nil,
                     sliderRange: 0...1,
                     step: 0.01,
+                    nudgeStep: 0.01,
                     initialValue: viewModel.wetness,
                     displayedValueFormat: "%.2f",
                     viewModel: viewModel
@@ -149,12 +153,15 @@ private struct SingleParameterSheet: View {
     let unit: String?
     let sliderRange: ClosedRange<Double>
     let step: Double
+    let nudgeStep: Double
     let displayedValueFormat: String
     @ObservedObject var viewModel: WaveGeneratorViewModel
     let applyValue: (Double) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
     @State private var draftValue: Double
+    @State private var draftText: String
+    @FocusState private var isValueFieldFocused: Bool
 
     init(
         title: String,
@@ -162,6 +169,7 @@ private struct SingleParameterSheet: View {
         unit: String?,
         sliderRange: ClosedRange<Double>,
         step: Double,
+        nudgeStep: Double,
         initialValue: Double,
         displayedValueFormat: String,
         viewModel: WaveGeneratorViewModel,
@@ -172,10 +180,17 @@ private struct SingleParameterSheet: View {
         self.unit = unit
         self.sliderRange = sliderRange
         self.step = step
+        self.nudgeStep = nudgeStep
         self.displayedValueFormat = displayedValueFormat
         self.viewModel = viewModel
         self.applyValue = applyValue
-        _draftValue = State(initialValue: initialValue)
+        let clamped = Self.normalize(
+            value: initialValue,
+            in: sliderRange,
+            step: step
+        )
+        _draftValue = State(initialValue: clamped)
+        _draftText = State(initialValue: String(format: displayedValueFormat, clamped))
     }
 
     var body: some View {
@@ -194,6 +209,30 @@ private struct SingleParameterSheet: View {
                         }
                     }
                     Slider(value: $draftValue, in: sliderRange, step: step)
+
+                    HStack {
+                        Button {
+                            nudge(by: -nudgeStep)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .accessibilityLabel("Decrease")
+
+                        TextField("Value", text: $draftText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.center)
+                            .focused($isValueFieldFocused)
+                            .onSubmit {
+                                commitTypedValue()
+                            }
+
+                        Button {
+                            nudge(by: nudgeStep)
+                        } label: {
+                            Image(systemName: "plus.circle")
+                        }
+                        .accessibilityLabel("Increase")
+                    }
                 }
 
                 if viewModel.isQueueSaturated {
@@ -215,6 +254,7 @@ private struct SingleParameterSheet: View {
 
                 ToolbarItem(placement: .confirmationAction) {
                     Button(viewModel.isApplyingSettings ? "Applying..." : "Apply") {
+                        commitTypedValue()
                         Task {
                             let applied = await applyValue(draftValue)
                             if applied {
@@ -224,9 +264,44 @@ private struct SingleParameterSheet: View {
                     }
                     .disabled(viewModel.isApplyingSettings || viewModel.isQueueSaturated)
                 }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        commitTypedValue()
+                        isValueFieldFocused = false
+                    }
+                }
+            }
+        }
+        .onChange(of: draftValue) { _, newValue in
+            if !isValueFieldFocused {
+                draftText = String(format: displayedValueFormat, newValue)
             }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func nudge(by delta: Double) {
+        let next = draftValue + delta
+        draftValue = Self.normalize(value: next, in: sliderRange, step: step)
+        draftText = String(format: displayedValueFormat, draftValue)
+    }
+
+    private func commitTypedValue() {
+        guard let parsed = Double(draftText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            draftText = String(format: displayedValueFormat, draftValue)
+            return
+        }
+        draftValue = Self.normalize(value: parsed, in: sliderRange, step: step)
+        draftText = String(format: displayedValueFormat, draftValue)
+    }
+
+    private static func normalize(value: Double, in range: ClosedRange<Double>, step: Double) -> Double {
+        let clamped = min(max(value, range.lowerBound), range.upperBound)
+        guard step > 0 else { return clamped }
+        let snapped = (clamped / step).rounded() * step
+        return min(max(snapped, range.lowerBound), range.upperBound)
     }
 }
 
