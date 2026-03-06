@@ -7,7 +7,7 @@ final class WaveGeneratorViewModel: ObservableObject {
     @Published var carrierHz: Double = 256
     @Published var pulseHz: Double = 1
     @Published var wetness: Double = 0
-    @Published var transitionSeconds: Double = 2
+    @Published var transitionSeconds: Double = 5
 
     @Published private(set) var isQueueSaturated = false
     @Published private(set) var isApplyingSettings = false
@@ -26,7 +26,9 @@ final class WaveGeneratorViewModel: ObservableObject {
             )
             startQueueMonitor()
         } catch {
+            let nsError = error as NSError
             print("Audio engine start failed: \(error)")
+            print("NSError domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
         }
     }
 

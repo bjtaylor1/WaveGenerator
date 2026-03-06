@@ -19,7 +19,7 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Slider(value: $viewModel.transitionSeconds, in: 0.5...10, step: 0.1)
+                    Slider(value: $viewModel.transitionSeconds, in: 5...30, step: 0.1)
                 }
 
                 Section("Wave") {

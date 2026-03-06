@@ -2,6 +2,17 @@ import AVFoundation
 import Foundation
 import Synchronization
 
+enum WaveAudioEngineError: Error, LocalizedError {
+    case audioSessionSetup(step: String, underlying: Error)
+
+    var errorDescription: String? {
+        switch self {
+        case let .audioSessionSetup(step, underlying):
+            return "Audio session failed at \(step): \(underlying.localizedDescription)"
+        }
+    }
+}
+
 private enum WaveCommandKind: Int32 {
     case setCarrierHz = 0
     case setPulseHz = 1
@@ -114,11 +125,32 @@ final class WaveAudioEngine {
         }
 
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, options: [.allowBluetoothA2DP, .allowBluetooth])
-        try session.setActive(true)
+        do {
+            try session.setCategory(.playback, mode: .default, options: [])
+        } catch {
+            throw WaveAudioEngineError.audioSessionSetup(step: "setCategory(.playback)", underlying: error)
+        }
 
-        let outputFormat = engine.outputNode.outputFormat(forBus: 0)
-        let state = RenderState(sampleRate: outputFormat.sampleRate)
+        do {
+            try session.setActive(true, options: [])
+        } catch {
+            throw WaveAudioEngineError.audioSessionSetup(step: "setActive(true)", underlying: error)
+        }
+
+        let preferredSampleRate = session.sampleRate > 0 ? session.sampleRate : 48_000
+        guard let renderFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: preferredSampleRate,
+            channels: 2,
+            interleaved: false
+        ) else {
+            throw WaveAudioEngineError.audioSessionSetup(
+                step: "createRenderFormat",
+                underlying: NSError(domain: "WaveAudioEngine", code: -1)
+            )
+        }
+
+        let state = RenderState(sampleRate: renderFormat.sampleRate)
         self.renderState = state
 
         let source = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
@@ -159,7 +191,7 @@ final class WaveAudioEngine {
         }
 
         engine.attach(source)
-        engine.connect(source, to: engine.mainMixerNode, format: outputFormat)
+        engine.connect(source, to: engine.mainMixerNode, format: renderFormat)
         sourceNode = source
 
         try engine.start()
