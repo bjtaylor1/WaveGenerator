@@ -1,4 +1,3 @@
-import Foundation
 import SwiftUI
 
 struct ContentView: View {
@@ -160,8 +159,6 @@ private struct SingleParameterSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var draftValue: Double
-    @State private var draftText: String
-    @FocusState private var isValueFieldFocused: Bool
 
     init(
         title: String,
@@ -190,7 +187,6 @@ private struct SingleParameterSheet: View {
             step: step
         )
         _draftValue = State(initialValue: clamped)
-        _draftText = State(initialValue: String(format: displayedValueFormat, clamped))
     }
 
     var body: some View {
@@ -216,21 +212,27 @@ private struct SingleParameterSheet: View {
                         } label: {
                             Image(systemName: "minus.circle")
                         }
+                        .buttonStyle(.bordered)
                         .accessibilityLabel("Decrease")
 
-                        TextField("Value", text: $draftText)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.center)
-                            .focused($isValueFieldFocused)
-                            .onSubmit {
-                                commitTypedValue()
-                            }
+                        Spacer()
+
+                        if let unit {
+                            Text("\(draftValue, specifier: displayedValueFormat) \(unit)")
+                                .font(.body.monospacedDigit())
+                        } else {
+                            Text("\(draftValue, specifier: displayedValueFormat)")
+                                .font(.body.monospacedDigit())
+                        }
+
+                        Spacer()
 
                         Button {
                             nudge(by: nudgeStep)
                         } label: {
                             Image(systemName: "plus.circle")
                         }
+                        .buttonStyle(.bordered)
                         .accessibilityLabel("Increase")
                     }
                 }
@@ -254,7 +256,6 @@ private struct SingleParameterSheet: View {
 
                 ToolbarItem(placement: .confirmationAction) {
                     Button(viewModel.isApplyingSettings ? "Applying..." : "Apply") {
-                        commitTypedValue()
                         Task {
                             let applied = await applyValue(draftValue)
                             if applied {
@@ -264,19 +265,6 @@ private struct SingleParameterSheet: View {
                     }
                     .disabled(viewModel.isApplyingSettings || viewModel.isQueueSaturated)
                 }
-
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") {
-                        commitTypedValue()
-                        isValueFieldFocused = false
-                    }
-                }
-            }
-        }
-        .onChange(of: draftValue) { _, newValue in
-            if !isValueFieldFocused {
-                draftText = String(format: displayedValueFormat, newValue)
             }
         }
         .presentationDetents([.medium, .large])
@@ -285,16 +273,6 @@ private struct SingleParameterSheet: View {
     private func nudge(by delta: Double) {
         let next = draftValue + delta
         draftValue = Self.normalize(value: next, in: sliderRange, step: step)
-        draftText = String(format: displayedValueFormat, draftValue)
-    }
-
-    private func commitTypedValue() {
-        guard let parsed = Double(draftText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            draftText = String(format: displayedValueFormat, draftValue)
-            return
-        }
-        draftValue = Self.normalize(value: parsed, in: sliderRange, step: step)
-        draftText = String(format: displayedValueFormat, draftValue)
     }
 
     private static func normalize(value: Double, in range: ClosedRange<Double>, step: Double) -> Double {
