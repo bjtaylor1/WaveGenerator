@@ -2,7 +2,15 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = WaveGeneratorViewModel()
-    @State private var isEditorPresented = false
+    @State private var activeEditor: ParameterEditor?
+
+    private enum ParameterEditor: String, Identifiable {
+        case carrier
+        case pulse
+        case wetness
+
+        var id: String { rawValue }
+    }
 
     var body: some View {
         NavigationStack {
@@ -29,12 +37,18 @@ struct ContentView: View {
                         Text("\(viewModel.carrierHz, specifier: "%.0f") Hz")
                             .foregroundStyle(.secondary)
                     }
+                    Button("Edit Carrier") {
+                        activeEditor = .carrier
+                    }
 
                     HStack {
                         Text("Pulse")
                         Spacer()
                         Text("\(viewModel.pulseHz, specifier: "%.2f") Hz")
                             .foregroundStyle(.secondary)
+                    }
+                    Button("Edit Pulse") {
+                        activeEditor = .pulse
                     }
 
                     HStack {
@@ -43,9 +57,8 @@ struct ContentView: View {
                         Text("\(viewModel.wetness, specifier: "%.2f")")
                             .foregroundStyle(.secondary)
                     }
-
-                    Button("Edit Wave Settings") {
-                        isEditorPresented = true
+                    Button("Edit Wetness") {
+                        activeEditor = .wetness
                     }
 
                     if viewModel.isQueueSaturated {
@@ -60,54 +73,115 @@ struct ContentView: View {
         .onAppear {
             viewModel.configureAudio()
         }
-        .sheet(isPresented: $isEditorPresented) {
-            WaveSettingsSheet(viewModel: viewModel)
+        .sheet(item: $activeEditor) { editor in
+            switch editor {
+            case .carrier:
+                SingleParameterSheet(
+                    title: "Edit Carrier",
+                    valueLabel: "Carrier",
+                    unit: "Hz",
+                    sliderRange: 200...1200,
+                    step: 1,
+                    initialValue: viewModel.carrierHz,
+                    displayedValueFormat: "%.0f",
+                    viewModel: viewModel
+                ) { value in
+                    await viewModel.applyStagedSettings(
+                        carrierHz: value,
+                        pulseHz: viewModel.pulseHz,
+                        wetness: viewModel.wetness
+                    )
+                }
+            case .pulse:
+                SingleParameterSheet(
+                    title: "Edit Pulse",
+                    valueLabel: "Pulse",
+                    unit: "Hz",
+                    sliderRange: 0...20,
+                    step: 0.01,
+                    initialValue: viewModel.pulseHz,
+                    displayedValueFormat: "%.2f",
+                    viewModel: viewModel
+                ) { value in
+                    await viewModel.applyStagedSettings(
+                        carrierHz: viewModel.carrierHz,
+                        pulseHz: value,
+                        wetness: viewModel.wetness
+                    )
+                }
+            case .wetness:
+                SingleParameterSheet(
+                    title: "Edit Wetness",
+                    valueLabel: "Wetness",
+                    unit: nil,
+                    sliderRange: 0...1,
+                    step: 0.01,
+                    initialValue: viewModel.wetness,
+                    displayedValueFormat: "%.2f",
+                    viewModel: viewModel
+                ) { value in
+                    await viewModel.applyStagedSettings(
+                        carrierHz: viewModel.carrierHz,
+                        pulseHz: viewModel.pulseHz,
+                        wetness: value
+                    )
+                }
+            }
         }
     }
 }
 
-private struct WaveSettingsSheet: View {
+private struct SingleParameterSheet: View {
+    let title: String
+    let valueLabel: String
+    let unit: String?
+    let sliderRange: ClosedRange<Double>
+    let step: Double
+    let displayedValueFormat: String
     @ObservedObject var viewModel: WaveGeneratorViewModel
+    let applyValue: (Double) async -> Bool
+
     @Environment(\.dismiss) private var dismiss
+    @State private var draftValue: Double
 
-    @State private var draftCarrierHz: Double
-    @State private var draftPulseHz: Double
-    @State private var draftWetness: Double
-
-    init(viewModel: WaveGeneratorViewModel) {
+    init(
+        title: String,
+        valueLabel: String,
+        unit: String?,
+        sliderRange: ClosedRange<Double>,
+        step: Double,
+        initialValue: Double,
+        displayedValueFormat: String,
+        viewModel: WaveGeneratorViewModel,
+        applyValue: @escaping (Double) async -> Bool
+    ) {
+        self.title = title
+        self.valueLabel = valueLabel
+        self.unit = unit
+        self.sliderRange = sliderRange
+        self.step = step
+        self.displayedValueFormat = displayedValueFormat
         self.viewModel = viewModel
-        _draftCarrierHz = State(initialValue: viewModel.carrierHz)
-        _draftPulseHz = State(initialValue: viewModel.pulseHz)
-        _draftWetness = State(initialValue: viewModel.wetness)
+        self.applyValue = applyValue
+        _draftValue = State(initialValue: initialValue)
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Temporary Edits") {
+                Section("Temporary Edit") {
                     HStack {
-                        Text("Carrier")
+                        Text(valueLabel)
                         Spacer()
-                        Text("\(draftCarrierHz, specifier: "%.0f") Hz")
-                            .foregroundStyle(.secondary)
+                        if let unit {
+                            Text("\(draftValue, specifier: displayedValueFormat) \(unit)")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("\(draftValue, specifier: displayedValueFormat)")
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    Slider(value: $draftCarrierHz, in: 200...1200, step: 1)
-
-                    HStack {
-                        Text("Pulse")
-                        Spacer()
-                        Text("\(draftPulseHz, specifier: "%.2f") Hz")
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(value: $draftPulseHz, in: 0...20, step: 0.01)
-
-                    HStack {
-                        Text("Wetness")
-                        Spacer()
-                        Text("\(draftWetness, specifier: "%.2f")")
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(value: $draftWetness, in: 0...1, step: 0.01)
+                    Slider(value: $draftValue, in: sliderRange, step: step)
                 }
 
                 if viewModel.isQueueSaturated {
@@ -118,7 +192,7 @@ private struct WaveSettingsSheet: View {
                     }
                 }
             }
-            .navigationTitle("Edit Wave")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -130,11 +204,7 @@ private struct WaveSettingsSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(viewModel.isApplyingSettings ? "Applying..." : "Apply") {
                         Task {
-                            let applied = await viewModel.applyStagedSettings(
-                                carrierHz: draftCarrierHz,
-                                pulseHz: draftPulseHz,
-                                wetness: draftWetness
-                            )
+                            let applied = await applyValue(draftValue)
                             if applied {
                                 dismiss()
                             }
