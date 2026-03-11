@@ -14,15 +14,15 @@ enum WaveAudioEngineError: Error, LocalizedError {
 }
 
 private enum WaveCommandKind: Int32 {
-    case setCarrierHz = 0
-    case setPulseHz = 1
-    case setWetness = 2
-    case setMasterGain = 3
-    case applyParameters = 4
+    case setComponentFrequency = 0
+    case setComponentWetness = 1
+    case setMasterGain = 2
+    case applyParameters = 3
 }
 
 private struct WaveCommand {
     var kind: Int32
+    var componentIndex: Int32
     var value: Double
     var value2: Double
     var value3: Double
@@ -44,6 +44,7 @@ private final class WaveCommandQueue {
         self.buffer.initialize(
             repeating: WaveCommand(
                 kind: WaveCommandKind.setMasterGain.rawValue,
+                componentIndex: 0,
                 value: 0,
                 value2: 0,
                 value3: 0,
@@ -90,7 +91,8 @@ private final class WaveCommandQueue {
 }
 
 final class WaveAudioEngine {
-    private static let minCarrierHz: Double = 200
+    private static let carrierComponentIndex = 0
+    private static let primaryPulseComponentIndex = 1
 
     private let engine = AVAudioEngine()
     private let commandQueue = WaveCommandQueue()
@@ -98,19 +100,72 @@ final class WaveAudioEngine {
     private var sourceNode: AVAudioSourceNode?
     private var isConfigured = false
 
+    private enum ComponentMode {
+        case bipolarSine
+        case unipolarPulse
+    }
+
+    private final class ComponentState {
+        let mode: ComponentMode
+        let minimumFrequency: Double
+        var phase: Double = 0
+
+        let frequency: RampedParameter
+        let wetness: RampedParameter
+
+        init(
+            mode: ComponentMode,
+            minimumFrequency: Double,
+            initialFrequency: Double,
+            initialWetness: Double
+        ) {
+            self.mode = mode
+            self.minimumFrequency = minimumFrequency
+            self.frequency = RampedParameter(initialValue: initialFrequency)
+            self.wetness = RampedParameter(initialValue: initialWetness)
+        }
+
+        func amplitude(at frame: Int64, sampleRate: Double) -> Double {
+            let hz = max(minimumFrequency, frequency.value(at: frame))
+            phase += 2 * .pi * hz / sampleRate
+            if phase >= 2 * .pi {
+                phase.formTruncatingRemainder(dividingBy: 2 * .pi)
+            }
+
+            switch mode {
+            case .bipolarSine:
+                return sin(phase)
+            case .unipolarPulse:
+                let wetnessValue = min(1, max(0, wetness.value(at: frame)))
+                let pulse = (sin(phase) + 1) * 0.5
+                return wetnessValue + (1 - wetnessValue) * pulse
+            }
+        }
+    }
+
     private final class RenderState {
         let sampleRate: Double
         var framePosition: Int64 = 0
-        var carrierPhase: Double = 0
-        var pulsePhase: Double = 0
+        let components: [ComponentState]
 
-        let carrierHz = RampedParameter(initialValue: 256)
-        let pulseHz = RampedParameter(initialValue: 1)
-        let wetness = RampedParameter(initialValue: 0)
         let masterGain = RampedParameter(initialValue: 0)
 
         init(sampleRate: Double) {
             self.sampleRate = sampleRate
+            self.components = [
+                ComponentState(
+                    mode: .bipolarSine,
+                    minimumFrequency: 200,
+                    initialFrequency: 256,
+                    initialWetness: 0
+                ),
+                ComponentState(
+                    mode: .unipolarPulse,
+                    minimumFrequency: 0.01,
+                    initialFrequency: 1,
+                    initialWetness: 0
+                ),
+            ]
         }
     }
 
@@ -163,21 +218,11 @@ final class WaveAudioEngine {
 
             for frameOffset in 0..<frames {
                 let currentFrame = state.framePosition + Int64(frameOffset)
-
-                let carrierHz = max(Self.minCarrierHz, state.carrierHz.value(at: currentFrame))
-                let pulseHz = max(0, state.pulseHz.value(at: currentFrame))
-                let wetness = min(1, max(0, state.wetness.value(at: currentFrame)))
                 let gain = min(1, max(0, state.masterGain.value(at: currentFrame)))
-
-                state.carrierPhase += 2 * .pi * carrierHz / state.sampleRate
-                state.pulsePhase += 2 * .pi * pulseHz / state.sampleRate
-
-                if state.carrierPhase >= 2 * .pi { state.carrierPhase.formTruncatingRemainder(dividingBy: 2 * .pi) }
-                if state.pulsePhase >= 2 * .pi { state.pulsePhase.formTruncatingRemainder(dividingBy: 2 * .pi) }
-
-                let pulse = (sin(state.pulsePhase) + 1) * 0.5
-                let envelope = wetness + (1 - wetness) * pulse
-                let sample = Float(gain * envelope * sin(state.carrierPhase))
+                let mixedAmplitude = state.components.reduce(1.0) { partial, component in
+                    partial * component.amplitude(at: currentFrame, sampleRate: state.sampleRate)
+                }
+                let sample = Float(gain * mixedAmplitude)
 
                 for buffer in bufferList {
                     guard let mData = buffer.mData else { continue }
@@ -200,27 +245,39 @@ final class WaveAudioEngine {
 
     @discardableResult
     func startTone(rampSeconds: Double = 1.0) -> Bool {
-        enqueue(kind: .setMasterGain, value: 0.25, durationSeconds: rampSeconds)
+        enqueueMasterGain(value: 1.0, durationSeconds: rampSeconds)
     }
 
     @discardableResult
     func stopTone(rampSeconds: Double = 1.0) -> Bool {
-        enqueue(kind: .setMasterGain, value: 0.0, durationSeconds: rampSeconds)
+        enqueueMasterGain(value: 0.0, durationSeconds: rampSeconds)
     }
 
     @discardableResult
     func setCarrierHz(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
-        enqueue(kind: .setCarrierHz, value: max(Self.minCarrierHz, value), durationSeconds: durationSeconds)
+        enqueueFrequency(
+            componentIndex: Self.carrierComponentIndex,
+            value: max(200, value),
+            durationSeconds: durationSeconds
+        )
     }
 
     @discardableResult
     func setPulseHz(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
-        enqueue(kind: .setPulseHz, value: max(0, value), durationSeconds: durationSeconds)
+        enqueueFrequency(
+            componentIndex: Self.primaryPulseComponentIndex,
+            value: max(0.01, value),
+            durationSeconds: durationSeconds
+        )
     }
 
     @discardableResult
     func setWetness(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
-        enqueue(kind: .setWetness, value: min(1, max(0, value)), durationSeconds: durationSeconds)
+        enqueueWetness(
+            componentIndex: Self.primaryPulseComponentIndex,
+            value: min(1, max(0, value)),
+            durationSeconds: durationSeconds
+        )
     }
 
     @discardableResult
@@ -233,8 +290,9 @@ final class WaveAudioEngine {
         commandQueue.enqueue(
             WaveCommand(
                 kind: WaveCommandKind.applyParameters.rawValue,
-                value: max(Self.minCarrierHz, carrierHz),
-                value2: max(0, pulseHz),
+                componentIndex: 0,
+                value: max(200, carrierHz),
+                value2: max(0.01, pulseHz),
                 value3: min(1, max(0, wetness)),
                 durationSeconds: durationSeconds
             )
@@ -245,9 +303,42 @@ final class WaveAudioEngine {
         commandQueue.isFull()
     }
 
-    private func enqueue(kind: WaveCommandKind, value: Double, durationSeconds: Double) -> Bool {
+    private func enqueueFrequency(componentIndex: Int, value: Double, durationSeconds: Double) -> Bool {
         commandQueue.enqueue(
-            WaveCommand(kind: kind.rawValue, value: value, value2: 0, value3: 0, durationSeconds: durationSeconds)
+            WaveCommand(
+                kind: WaveCommandKind.setComponentFrequency.rawValue,
+                componentIndex: Int32(componentIndex),
+                value: value,
+                value2: 0,
+                value3: 0,
+                durationSeconds: durationSeconds
+            )
+        )
+    }
+
+    private func enqueueWetness(componentIndex: Int, value: Double, durationSeconds: Double) -> Bool {
+        commandQueue.enqueue(
+            WaveCommand(
+                kind: WaveCommandKind.setComponentWetness.rawValue,
+                componentIndex: Int32(componentIndex),
+                value: value,
+                value2: 0,
+                value3: 0,
+                durationSeconds: durationSeconds
+            )
+        )
+    }
+
+    private func enqueueMasterGain(value: Double, durationSeconds: Double) -> Bool {
+        commandQueue.enqueue(
+            WaveCommand(
+                kind: WaveCommandKind.setMasterGain.rawValue,
+                componentIndex: 0,
+                value: value,
+                value2: 0,
+                value3: 0,
+                durationSeconds: durationSeconds
+            )
         )
     }
 
@@ -259,21 +350,19 @@ final class WaveAudioEngine {
                 continue
             }
 
+            guard let component = state.components[safe: Int(command.componentIndex)] else {
+                continue
+            }
+
             switch kind {
-            case .setCarrierHz:
-                state.carrierHz.scheduleTransition(
+            case .setComponentFrequency:
+                component.frequency.scheduleTransition(
                     frame: now,
                     targetValue: command.value,
                     durationFrames: durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
                 )
-            case .setPulseHz:
-                state.pulseHz.scheduleTransition(
-                    frame: now,
-                    targetValue: command.value,
-                    durationFrames: durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
-                )
-            case .setWetness:
-                state.wetness.scheduleTransition(
+            case .setComponentWetness:
+                component.wetness.scheduleTransition(
                     frame: now,
                     targetValue: command.value,
                     durationFrames: durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
@@ -286,26 +375,36 @@ final class WaveAudioEngine {
                 )
             case .applyParameters:
                 let durationFrames = durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
-                state.carrierHz.scheduleTransition(
+                component.frequency.scheduleTransition(
                     frame: now,
                     targetValue: command.value,
                     durationFrames: durationFrames
                 )
-                state.pulseHz.scheduleTransition(
-                    frame: now,
-                    targetValue: command.value2,
-                    durationFrames: durationFrames
-                )
-                state.wetness.scheduleTransition(
-                    frame: now,
-                    targetValue: command.value3,
-                    durationFrames: durationFrames
-                )
+
+                if let primaryPulse = state.components[safe: Self.primaryPulseComponentIndex] {
+                    primaryPulse.frequency.scheduleTransition(
+                        frame: now,
+                        targetValue: command.value2,
+                        durationFrames: durationFrames
+                    )
+                    primaryPulse.wetness.scheduleTransition(
+                        frame: now,
+                        targetValue: command.value3,
+                        durationFrames: durationFrames
+                    )
+                }
             }
         }
     }
 
     private func durationToFrames(_ seconds: Double, sampleRate: Double) -> Int64 {
         Int64(max(1, (seconds * sampleRate).rounded()))
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard indices.contains(index) else { return nil }
+        return self[index]
     }
 }
