@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var activeEditor: ParameterEditor?
 
     private enum ParameterEditor: String, Identifiable {
+        case transition
         case carrier
         case pulse
         case wetness
@@ -25,9 +26,14 @@ struct ContentView: View {
                         Spacer()
                         Text("\(viewModel.transitionSeconds, specifier: "%.1f")s")
                             .foregroundStyle(.secondary)
+                        Button {
+                            activeEditor = .transition
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Edit Transition")
                     }
-
-                    Slider(value: $viewModel.transitionSeconds, in: 5...30, step: 0.1)
                 }
 
                 Section("Wave") {
@@ -87,12 +93,26 @@ struct ContentView: View {
         }
         .sheet(item: $activeEditor) { editor in
             switch editor {
+            case .transition:
+                SingleParameterSheet(
+                    title: "Edit Transition",
+                    valueLabel: "Transition",
+                    unit: "s",
+                    sliderRange: 5...30,
+                    step: 1,
+                    nudgeStep: 1,
+                    initialValue: viewModel.transitionSeconds,
+                    displayedValueFormat: "%.1f",
+                    viewModel: viewModel
+                ) { value in
+                    await viewModel.applyTransitionSeconds(value)
+                }
             case .carrier:
                 SingleParameterSheet(
                     title: "Edit Carrier",
                     valueLabel: "Carrier",
                     unit: "Hz",
-                    sliderRange: 200...1200,
+                    sliderRange: 200...2000,
                     step: 1,
                     nudgeStep: 1,
                     initialValue: viewModel.carrierHz,

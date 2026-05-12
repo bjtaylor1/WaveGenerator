@@ -4,10 +4,10 @@ import Combine
 @MainActor
 final class WaveGeneratorViewModel: ObservableObject {
     @Published var isPlaying = false
-    @Published var carrierHz: Double = 256
+    @Published var carrierHz: Double = 500
     @Published var pulseHz: Double = 1
     @Published var wetness: Double = 0
-    @Published var transitionSeconds: Double = 5
+    @Published var transitionSeconds: Double = 15
 
     @Published private(set) var isQueueSaturated = false
     @Published private(set) var isApplyingSettings = false
@@ -72,6 +72,11 @@ final class WaveGeneratorViewModel: ObservableObject {
         }
 
         return false
+    }
+
+    func applyTransitionSeconds(_ seconds: Double) async -> Bool {
+        transitionSeconds = min(30, max(5, seconds))
+        return true
     }
 
     deinit {

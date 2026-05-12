@@ -156,7 +156,7 @@ final class WaveAudioEngine {
                 ComponentState(
                     mode: .bipolarSine,
                     minimumFrequency: 200,
-                    initialFrequency: 256,
+                    initialFrequency: 500,
                     initialWetness: 0
                 ),
                 ComponentState(
