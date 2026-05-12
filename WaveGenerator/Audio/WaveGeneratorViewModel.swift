@@ -30,9 +30,26 @@ final class WaveGeneratorViewModel: ObservableObject {
     @Published var pulses: [PulseSettings] = [PulseSettings()]
     @Published var selectedPulseID: PulseSettings.ID?
     @Published var transitionSeconds: Double = 15
+    @Published var saveWAVOnStop = false {
+        didSet {
+            guard !isPlaying else {
+                saveWAVOnStop = oldValue
+                return
+            }
+
+            audioEngine.setRecordingEnabled(saveWAVOnStop)
+            if saveWAVOnStop {
+                lastSavedRecordingURL = nil
+                recordingErrorMessage = nil
+            }
+        }
+    }
 
     @Published private(set) var isQueueSaturated = false
     @Published private(set) var isApplyingSettings = false
+    @Published private(set) var isSavingRecording = false
+    @Published private(set) var lastSavedRecordingURL: URL?
+    @Published private(set) var recordingErrorMessage: String?
 
     private let audioEngine = WaveAudioEngine()
     private var queueMonitorTask: Task<Void, Never>?
@@ -44,6 +61,14 @@ final class WaveGeneratorViewModel: ObservableObject {
         }
 
         return pulses.first
+    }
+
+    func pulseFrequencyRange(for id: PulseSettings.ID) -> ClosedRange<Double> {
+        guard let index = pulses.firstIndex(where: { $0.id == id }) else {
+            return 0.01...20
+        }
+
+        return pulseFrequencyRange(at: index)
     }
 
     func configureAudio() {
@@ -68,12 +93,37 @@ final class WaveGeneratorViewModel: ObservableObject {
         }
     }
 
+    func stopPlayback() {
+        guard isPlaying else { return }
+
+        isPlaying = false
+        _ = audioEngine.stopTone(rampSeconds: transitionSeconds)
+
+        if saveWAVOnStop {
+            Task { [transitionSeconds] in
+                let delay = UInt64(max(0, transitionSeconds) * 1_000_000_000)
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+
+                await saveLastMinuteRecording()
+                saveWAVOnStop = false
+            }
+        }
+    }
+
+    func startPlayback() {
+        guard !isPlaying else { return }
+
+        isPlaying = true
+        _ = audioEngine.startTone(rampSeconds: transitionSeconds)
+    }
+
     func togglePlayback() {
-        isPlaying.toggle()
         if isPlaying {
-            _ = audioEngine.startTone(rampSeconds: transitionSeconds)
+            stopPlayback()
         } else {
-            _ = audioEngine.stopTone(rampSeconds: transitionSeconds)
+            startPlayback()
         }
     }
 
@@ -110,7 +160,7 @@ final class WaveGeneratorViewModel: ObservableObject {
 
         let pulse = PulseSettings(
             id: id,
-            frequency: max(0, frequency),
+            frequency: clamp(frequency, in: pulseFrequencyRange(at: index)),
             wetness: min(1, max(0, wetness)),
             volume: min(1, max(0, volume)),
             isRemoving: pulses[index].isRemoving
@@ -134,6 +184,20 @@ final class WaveGeneratorViewModel: ObservableObject {
         }
 
         return accepted
+    }
+
+    func saveLastMinuteRecording() async {
+        guard !isSavingRecording else { return }
+
+        isSavingRecording = true
+        recordingErrorMessage = nil
+        defer { isSavingRecording = false }
+
+        do {
+            lastSavedRecordingURL = try audioEngine.saveLastMinuteWAV()
+        } catch {
+            recordingErrorMessage = error.localizedDescription
+        }
     }
 
     func addPulse() async -> Bool {
@@ -227,5 +291,20 @@ final class WaveGeneratorViewModel: ObservableObject {
         }
 
         return false
+    }
+
+    private func pulseFrequencyRange(at index: Int) -> ClosedRange<Double> {
+        let lowerBound = pulses.indices.contains(index + 1)
+            ? max(0.01, pulses[index + 1].frequency)
+            : 0.01
+        let upperBound = index > 0
+            ? max(lowerBound, pulses[index - 1].frequency)
+            : 20
+
+        return lowerBound...upperBound
+    }
+
+    private func clamp(_ value: Double, in range: ClosedRange<Double>) -> Double {
+        min(max(value, range.lowerBound), range.upperBound)
     }
 }

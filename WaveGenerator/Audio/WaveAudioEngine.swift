@@ -92,6 +92,51 @@ private final class WaveCommandQueue {
     }
 }
 
+private struct WaveRecordingSnapshot {
+    let samples: [Float]
+    let sampleRate: Double
+}
+
+private final class WaveRecordingBuffer {
+    let sampleRate: Double
+
+    private let capacity: Int
+    private let buffer: UnsafeMutableBufferPointer<Float>
+    private let writeCount = Atomic<Int64>(0)
+
+    init(sampleRate: Double, durationSeconds: Double) {
+        self.sampleRate = sampleRate
+        self.capacity = max(1, Int((sampleRate * durationSeconds).rounded()))
+        self.buffer = UnsafeMutableBufferPointer<Float>.allocate(capacity: capacity)
+        self.buffer.initialize(repeating: 0)
+    }
+
+    deinit {
+        buffer.deinitialize()
+        buffer.deallocate()
+    }
+
+    func append(_ sample: Float) {
+        let write = writeCount.load(ordering: .relaxed)
+        buffer[Int(write % Int64(capacity))] = sample
+        writeCount.store(write + 1, ordering: .releasing)
+    }
+
+    func snapshot() -> WaveRecordingSnapshot {
+        let end = writeCount.load(ordering: .acquiring)
+        let count = min(Int(end), capacity)
+        let start = end - Int64(count)
+        var samples = [Float](repeating: 0, count: count)
+
+        for offset in 0..<count {
+            let sourceIndex = Int((start + Int64(offset)) % Int64(capacity))
+            samples[offset] = buffer[sourceIndex]
+        }
+
+        return WaveRecordingSnapshot(samples: samples, sampleRate: sampleRate)
+    }
+}
+
 final class WaveAudioEngine {
     private static let carrierComponentIndex = 0
 
@@ -99,6 +144,7 @@ final class WaveAudioEngine {
     private let commandQueue = WaveCommandQueue()
 
     private var sourceNode: AVAudioSourceNode?
+    private var recordingBuffer: WaveRecordingBuffer?
     private var isConfigured = false
 
     private enum ComponentMode {
@@ -231,7 +277,8 @@ final class WaveAudioEngine {
                 let mixedAmplitude = state.components.reduce(1.0) { partial, component in
                     partial * component.amplitude(at: currentFrame, sampleRate: state.sampleRate)
                 }
-                let sample = Float(gain * mixedAmplitude)
+                let sample = Float(min(1, max(-1, gain * mixedAmplitude)))
+                self.recordingBuffer?.append(sample)
 
                 for buffer in bufferList {
                     guard let mData = buffer.mData else { continue }
@@ -372,6 +419,76 @@ final class WaveAudioEngine {
 
     func isCommandQueueFull() -> Bool {
         commandQueue.isFull()
+    }
+
+    func setRecordingEnabled(_ isEnabled: Bool) {
+        guard isEnabled else {
+            recordingBuffer = nil
+            return
+        }
+
+        let sampleRate = renderState?.sampleRate ?? AVAudioSession.sharedInstance().sampleRate
+        recordingBuffer = WaveRecordingBuffer(
+            sampleRate: sampleRate > 0 ? sampleRate : 48_000,
+            durationSeconds: 60
+        )
+    }
+
+    func saveLastMinuteWAV() throws -> URL {
+        guard let recordingBuffer else {
+            throw NSError(
+                domain: "WaveAudioEngine",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Audio engine is not configured."]
+            )
+        }
+
+        let snapshot = recordingBuffer.snapshot()
+        guard !snapshot.samples.isEmpty else {
+            throw NSError(
+                domain: "WaveAudioEngine",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "No generated audio has been recorded yet."]
+            )
+        }
+
+        let directory = FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        let filename = "WaveGenerator-\(Self.recordingTimestamp())-\(UUID().uuidString.prefix(8)).wav"
+        let url = directory.appendingPathComponent(filename)
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: snapshot.sampleRate,
+            channels: 1,
+            interleaved: false
+        )!
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: format.settings
+        )
+        guard let pcmBuffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(snapshot.samples.count)
+        ) else {
+            throw NSError(
+                domain: "WaveAudioEngine",
+                code: -4,
+                userInfo: [NSLocalizedDescriptionKey: "Could not create WAV buffer."]
+            )
+        }
+
+        pcmBuffer.frameLength = AVAudioFrameCount(snapshot.samples.count)
+        snapshot.samples.withUnsafeBufferPointer { samples in
+            if let source = samples.baseAddress,
+               let destination = pcmBuffer.floatChannelData?[0] {
+                destination.update(from: source, count: snapshot.samples.count)
+            }
+        }
+
+        try file.write(from: pcmBuffer)
+        return url
     }
 
     private func enqueueFrequency(componentIndex: Int, value: Double, durationSeconds: Double) -> Bool {
@@ -525,6 +642,12 @@ final class WaveAudioEngine {
 
     private func durationToFrames(_ seconds: Double, sampleRate: Double) -> Int64 {
         Int64(max(0, (seconds * sampleRate).rounded()))
+    }
+
+    private static func recordingTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
     }
 }
 

@@ -45,7 +45,7 @@ Refinements:
 
 3. Clipping with multilayer multiplication
 - Risk: multiple layers can exceed expected level.
-- Mitigation: apply output headroom limiter strategy (or conservative gain law).
+- Mitigation: final samples are hard-clamped to `-1...1`; consider a headroom/limiter strategy later if clipping audibly occurs.
 
 4. Battery/performance
 - Risk: heavy per-sample math for many layers.
@@ -75,6 +75,8 @@ Refinements:
 - Smooth carrier/pulse/wetness changes through timeline modifiers.
 - Carrier minimum clamp at 200 Hz.
 - Dynamic pulse add/remove with ramped pulse contribution.
+- Save last minute of generated audio as a WAV file when the stopped-only recording switch is armed.
+- Pulse frequency editor enforces descending pulse order with a `0.01 Hz` floor.
 
 ## Deferred from POC
 - Modifier persistence/replay files.

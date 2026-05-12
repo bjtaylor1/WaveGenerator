@@ -34,6 +34,21 @@ struct ContentView: View {
                     Button(viewModel.isPlaying ? "Stop Tone" : "Start Tone") {
                         viewModel.togglePlayback()
                     }
+
+                    Toggle("Save WAV on Stop", isOn: $viewModel.saveWAVOnStop)
+                        .disabled(viewModel.isPlaying || viewModel.isSavingRecording)
+
+                    if let url = viewModel.lastSavedRecordingURL {
+                        ShareLink(item: url) {
+                            Label("Share WAV", systemImage: "square.and.arrow.up")
+                        }
+                    }
+
+                    if let recordingErrorMessage = viewModel.recordingErrorMessage {
+                        Text(recordingErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("Transition") {
@@ -201,11 +216,12 @@ struct ContentView: View {
                 }
             case let .pulseFrequency(id):
                 let pulse = viewModel.pulses.first(where: { $0.id == id }) ?? PulseSettings(id: id)
+                let frequencyRange = viewModel.pulseFrequencyRange(for: id)
                 SingleParameterSheet(
                     title: "Edit Pulse Frequency",
                     valueLabel: "Frequency",
                     unit: "Hz",
-                    sliderRange: 0...20,
+                    sliderRange: frequencyRange,
                     step: 0.01,
                     nudgeStep: 0.01,
                     initialValue: pulse.frequency,

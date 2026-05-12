@@ -7,8 +7,10 @@ Capture architecture and UX decisions made during implementation so future sessi
 - Parameter automation must use audio sample-frame time, not wall-clock timers.
 - No abrupt transitions: frequency and gain changes ramp while playing; stopped-wave parameter changes apply immediately.
 - Carrier frequency is always present and clamped to `>= 200 Hz`.
+- Final rendered samples are hard-clamped to `-1...1` before output and recording.
 - Oscillator phase continuity is preserved during parameter changes.
 - UI-to-engine command path uses a lock-free queue (avoid locks in render callback).
+- WAV capture is opt-in: arming "Save WAV on Stop" while stopped allocates a rolling one-minute mono buffer, and stopping saves then disarms it.
 - Parameter updates are applied as staged edits with explicit `Apply` in UI to avoid partial state drift.
 - Batched parameter apply command is available for coherent multi-parameter transitions.
 
@@ -45,6 +47,7 @@ Result:
 - Carrier is always visible and cannot be removed.
 - Pulses use a segmented selector with add/remove icon controls.
 - New pulses are added silently at `0.00` volume so frequency and wetness can be staged before ramping contribution up.
+- Pulse frequencies are ordered from faster to slower; each pulse can only be edited between its neighboring pulse frequencies, with an absolute floor of `0.01 Hz`.
 - Per-parameter sheet supports:
   - Slider for coarse changes.
   - `- / +` nudge buttons for precise step changes.
