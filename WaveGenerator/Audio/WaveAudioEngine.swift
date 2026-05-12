@@ -398,7 +398,7 @@ final class WaveAudioEngine {
     }
 
     private func durationToFrames(_ seconds: Double, sampleRate: Double) -> Int64 {
-        Int64(max(1, (seconds * sampleRate).rounded()))
+        Int64(max(0, (seconds * sampleRate).rounded()))
     }
 }
 

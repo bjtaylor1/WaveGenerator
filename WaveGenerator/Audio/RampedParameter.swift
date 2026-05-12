@@ -43,6 +43,12 @@ final class RampedParameter {
         targetValue: Double,
         durationFrames: Int64
     ) {
+        guard durationFrames > 0 else {
+            settledValue = targetValue
+            activeModifier = nil
+            return
+        }
+
         let clampedDuration = max(1, durationFrames)
         let startValue = value(at: nowFrame)
 

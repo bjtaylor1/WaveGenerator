@@ -52,13 +52,14 @@ final class WaveGeneratorViewModel: ObservableObject {
         let carrier = max(200, carrierHz)
         let pulse = max(0, pulseHz)
         let wet = min(1, max(0, wetness))
+        let durationSeconds = isPlaying ? transitionSeconds : 0
 
         while !Task.isCancelled {
             let accepted = audioEngine.applyParameters(
                 carrierHz: carrier,
                 pulseHz: pulse,
                 wetness: wet,
-                durationSeconds: transitionSeconds
+                durationSeconds: durationSeconds
             )
 
             if accepted {
