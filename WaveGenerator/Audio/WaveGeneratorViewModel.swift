@@ -1,7 +1,7 @@
-import Foundation
 import Combine
+import Foundation
 
-struct PulseSettings: Identifiable, Equatable {
+struct PulseSettings: Identifiable, Equatable, Codable {
     let id: UUID
     var frequency: Double
     var wetness: Double
@@ -26,10 +26,18 @@ struct PulseSettings: Identifiable, Equatable {
 @MainActor
 final class WaveGeneratorViewModel: ObservableObject {
     @Published var isPlaying = false
-    @Published var carrierHz: Double = 500
-    @Published var pulses: [PulseSettings] = [PulseSettings()]
-    @Published var selectedPulseID: PulseSettings.ID?
-    @Published var transitionSeconds: Double = 15
+    @Published var carrierHz: Double = 500 {
+        didSet { persistSettings() }
+    }
+    @Published var pulses: [PulseSettings] = [PulseSettings()] {
+        didSet { persistSettings() }
+    }
+    @Published var selectedPulseID: PulseSettings.ID? {
+        didSet { persistSettings() }
+    }
+    @Published var transitionSeconds: Double = 15 {
+        didSet { persistSettings() }
+    }
     @Published var saveWAVOnStop = false {
         didSet {
             guard !isPlaying else {
@@ -53,6 +61,12 @@ final class WaveGeneratorViewModel: ObservableObject {
 
     private let audioEngine = WaveAudioEngine()
     private var queueMonitorTask: Task<Void, Never>?
+    private let settingsStore = WaveSettingsStore()
+    private var hasConfiguredAudioState = false
+
+    init() {
+        restoreSettings()
+    }
 
     var selectedPulse: PulseSettings? {
         if let selectedPulseID,
@@ -78,13 +92,10 @@ final class WaveGeneratorViewModel: ObservableObject {
 
         do {
             try audioEngine.startEngineIfNeeded()
-            _ = audioEngine.applyParameters(
-                carrierHz: carrierHz,
-                pulseHz: pulses.first?.frequency ?? 1,
-                wetness: pulses.first?.wetness ?? 0,
-                pulseVolume: pulses.first?.volume ?? 1,
-                durationSeconds: 0.01
-            )
+            if !hasConfiguredAudioState {
+                applyRestoredAudioState()
+                hasConfiguredAudioState = true
+            }
             startQueueMonitor()
         } catch {
             let nsError = error as NSError
@@ -306,5 +317,95 @@ final class WaveGeneratorViewModel: ObservableObject {
 
     private func clamp(_ value: Double, in range: ClosedRange<Double>) -> Double {
         min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    private func applyRestoredAudioState() {
+        _ = audioEngine.applyCarrierHz(carrierHz, durationSeconds: 0)
+
+        if let firstPulse = pulses.first {
+            _ = audioEngine.applyPulse(
+                at: 0,
+                frequency: firstPulse.frequency,
+                wetness: firstPulse.wetness,
+                volume: firstPulse.volume,
+                durationSeconds: 0
+            )
+        } else {
+            _ = audioEngine.removePulse(at: 0, durationSeconds: 0)
+        }
+
+        for pulse in pulses.dropFirst() {
+            _ = audioEngine.addPulse(
+                frequency: pulse.frequency,
+                wetness: pulse.wetness,
+                targetVolume: pulse.volume,
+                durationSeconds: 0
+            )
+        }
+    }
+
+    private func restoreSettings() {
+        guard let settings = settingsStore.load() else { return }
+
+        carrierHz = max(200, settings.carrierHz)
+        transitionSeconds = min(30, max(5, settings.transitionSeconds))
+        pulses = Self.normalizedPulses(settings.pulses)
+        selectedPulseID = pulses.contains(where: { $0.id == settings.selectedPulseID })
+            ? settings.selectedPulseID
+            : pulses.first?.id
+    }
+
+    private func persistSettings() {
+        settingsStore.save(
+            WaveGeneratorSettings(
+                carrierHz: carrierHz,
+                transitionSeconds: transitionSeconds,
+                pulses: Self.normalizedPulses(pulses),
+                selectedPulseID: selectedPulseID
+            )
+        )
+    }
+
+    private static func normalizedPulses(_ pulses: [PulseSettings]) -> [PulseSettings] {
+        var previousFrequency = 20.0
+        return pulses.map { pulse in
+            let frequency = min(previousFrequency, max(0.01, pulse.frequency))
+            previousFrequency = frequency
+            return PulseSettings(
+                id: pulse.id,
+                frequency: frequency,
+                wetness: min(1, max(0, pulse.wetness)),
+                volume: min(1, max(0, pulse.volume)),
+                isRemoving: false
+            )
+        }
+    }
+}
+
+private struct WaveGeneratorSettings: Codable {
+    var carrierHz: Double
+    var transitionSeconds: Double
+    var pulses: [PulseSettings]
+    var selectedPulseID: PulseSettings.ID?
+}
+
+private final class WaveSettingsStore {
+    private let key = "WaveGenerator.settings.v1"
+    private let defaults: UserDefaults
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func load() -> WaveGeneratorSettings? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? decoder.decode(WaveGeneratorSettings.self, from: data)
+    }
+
+    func save(_ settings: WaveGeneratorSettings) {
+        guard let data = try? encoder.encode(settings) else { return }
+        defaults.set(data, forKey: key)
     }
 }

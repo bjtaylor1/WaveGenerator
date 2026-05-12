@@ -13,6 +13,7 @@ Capture architecture and UX decisions made during implementation so future sessi
 - WAV capture is opt-in: arming "Save WAV on Stop" while stopped allocates a rolling one-minute mono buffer, and stopping saves then disarms it.
 - Parameter updates are applied as staged edits with explicit `Apply` in UI to avoid partial state drift.
 - Batched parameter apply command is available for coherent multi-parameter transitions.
+- Waveform settings are persisted in `UserDefaults`, including carrier, transition, pulse layers, and selected pulse; the armed WAV capture switch is intentionally transient.
 
 ## iPhone Audio Startup Reliability
 Observed issue:
