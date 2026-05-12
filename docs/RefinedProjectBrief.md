@@ -43,13 +43,13 @@ Refinements:
 - Risk: updating params at UI tick rate introduces stepping.
 - Mitigation: all UI edits become timed ramps evaluated per sample.
 
-3. Clipping with future multilayer multiplication
+3. Clipping with multilayer multiplication
 - Risk: multiple layers can exceed expected level.
 - Mitigation: apply output headroom limiter strategy (or conservative gain law).
 
 4. Battery/performance
 - Risk: heavy per-sample math for many layers.
-- Mitigation: keep MVP single layer; scale with vectorized math / bounded layer count later.
+- Mitigation: scale with vectorized math / bounded layer count later.
 
 ## Suggested Architecture
 - `WaveAudioEngine`
@@ -64,18 +64,19 @@ Refinements:
   - Append completed modifiers to JSONL for playback/reconstruction.
 
 ## Layering Roadmap
-- MVP: one carrier + one pulse envelope.
-- Next: N pulse layers multiplied into envelope.
-- Layer introduction rule: create muted layer then ramp layer gain up.
+- Carrier is mandatory and cannot be deleted.
+- Pulse layers are dynamic; the app starts with one pulse, but supports carrier-only output.
+- N pulse layers are multiplied into the output via neutral-at-zero contribution envelopes.
+- Layer introduction rule: create muted layer, allow silent frequency/wetness tuning, then ramp layer volume up when desired.
 
 ## POC Scope (implemented now)
 - Tone output to iPhone/iPad speaker/headphones.
 - Smooth start/stop through gain ramp.
 - Smooth carrier/pulse/wetness changes through timeline modifiers.
 - Carrier minimum clamp at 200 Hz.
+- Dynamic pulse add/remove with ramped pulse contribution.
 
 ## Deferred from POC
-- Multi-layer editor UI.
 - Modifier persistence/replay files.
 - Real-time safe lock-free control queue.
 - Disable controls while active transition (optional UX policy).

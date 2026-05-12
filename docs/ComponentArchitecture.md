@@ -23,8 +23,8 @@ In the current Swift refactor, the engine starts with two components:
 
 The existing UI maps to those components as follows:
 - `Carrier` edits `components[0].frequency`
-- `Pulse` edits `components[1].frequency`
-- `Wetness` edits `components[1].wetness`
+- each pulse edits a dynamic pulse component's frequency, wetness, and volume
+- the app starts with one pulse, but pulses can be removed down to carrier-only output
 
 ## Local Phase
 The intended phase model matches the older C++ engine in `~/wavegen/wavelib`.
@@ -47,6 +47,8 @@ The intended mixer rule is multiplicative:
 
 This matches the old C++ design, where grouped components can be aggregated by `product`.
 
+Pulse volume is a contribution control, not a direct post-multiply gain. At `volume = 0`, a pulse component returns neutral amplitude `1` and has no effect on the output. At `volume = 1`, it contributes its full wetness-controlled pulse envelope. This lets pulse add/remove operations pass through a neutral multiplier instead of jolting the output.
+
 ## Command Ownership
 Commands should be thought of as belonging to a specific component:
 - set frequency for component `i`
@@ -58,7 +60,7 @@ Batch UI operations may still exist, but internally they should decompose into c
 ## Why This Matters
 This structure supports the intended roadmap:
 - keep the base component mandatory
-- allow many pulse components later
+- allow many pulse components
 - keep per-component automation isolated
 - avoid coupling pulse logic to carrier-cycle inspection
 

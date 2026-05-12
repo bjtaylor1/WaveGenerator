@@ -5,7 +5,7 @@ Capture architecture and UX decisions made during implementation so future sessi
 
 ## Audio Architecture Decisions
 - Parameter automation must use audio sample-frame time, not wall-clock timers.
-- No abrupt transitions: frequency and gain changes are always ramped.
+- No abrupt transitions: frequency and gain changes ramp while playing; stopped-wave parameter changes apply immediately.
 - Carrier frequency is always present and clamped to `>= 200 Hz`.
 - Oscillator phase continuity is preserved during parameter changes.
 - UI-to-engine command path uses a lock-free queue (avoid locks in render callback).
@@ -39,9 +39,12 @@ Result:
 - Avoid visually heavy button labels where icon buttons are sufficient.
 
 ## Current Parameter Editing UX
-- Transition slider exists on main screen.
+- Transition uses the same inline pencil edit sheet pattern as the other controls.
 - Transition minimum is `5.0s`.
 - Each parameter row shows current value and inline edit icon.
+- Carrier is always visible and cannot be removed.
+- Pulses use a segmented selector with add/remove icon controls.
+- New pulses are added silently at `0.00` volume so frequency and wetness can be staged before ramping contribution up.
 - Per-parameter sheet supports:
   - Slider for coarse changes.
   - `- / +` nudge buttons for precise step changes.

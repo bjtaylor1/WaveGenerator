@@ -18,6 +18,8 @@ private enum WaveCommandKind: Int32 {
     case setComponentWetness = 1
     case setMasterGain = 2
     case applyParameters = 3
+    case addPulse = 4
+    case removePulse = 5
 }
 
 private struct WaveCommand {
@@ -92,7 +94,6 @@ private final class WaveCommandQueue {
 
 final class WaveAudioEngine {
     private static let carrierComponentIndex = 0
-    private static let primaryPulseComponentIndex = 1
 
     private let engine = AVAudioEngine()
     private let commandQueue = WaveCommandQueue()
@@ -112,17 +113,21 @@ final class WaveAudioEngine {
 
         let frequency: RampedParameter
         let wetness: RampedParameter
+        let volume: RampedParameter
+        var pendingRemovalFrame: Int64?
 
         init(
             mode: ComponentMode,
             minimumFrequency: Double,
             initialFrequency: Double,
-            initialWetness: Double
+            initialWetness: Double,
+            initialVolume: Double
         ) {
             self.mode = mode
             self.minimumFrequency = minimumFrequency
             self.frequency = RampedParameter(initialValue: initialFrequency)
             self.wetness = RampedParameter(initialValue: initialWetness)
+            self.volume = RampedParameter(initialValue: initialVolume)
         }
 
         func amplitude(at frame: Int64, sampleRate: Double) -> Double {
@@ -137,8 +142,10 @@ final class WaveAudioEngine {
                 return sin(phase)
             case .unipolarPulse:
                 let wetnessValue = min(1, max(0, wetness.value(at: frame)))
+                let volumeValue = min(1, max(0, volume.value(at: frame)))
                 let pulse = (sin(phase) + 1) * 0.5
-                return wetnessValue + (1 - wetnessValue) * pulse
+                let envelope = wetnessValue + (1 - wetnessValue) * pulse
+                return 1 + volumeValue * (envelope - 1)
             }
         }
     }
@@ -146,7 +153,7 @@ final class WaveAudioEngine {
     private final class RenderState {
         let sampleRate: Double
         var framePosition: Int64 = 0
-        let components: [ComponentState]
+        var components: [ComponentState]
 
         let masterGain = RampedParameter(initialValue: 0)
 
@@ -157,13 +164,15 @@ final class WaveAudioEngine {
                     mode: .bipolarSine,
                     minimumFrequency: 200,
                     initialFrequency: 500,
-                    initialWetness: 0
+                    initialWetness: 0,
+                    initialVolume: 1
                 ),
                 ComponentState(
                     mode: .unipolarPulse,
                     minimumFrequency: 0.01,
                     initialFrequency: 1,
-                    initialWetness: 0
+                    initialWetness: 0,
+                    initialVolume: 1
                 ),
             ]
         }
@@ -232,6 +241,7 @@ final class WaveAudioEngine {
             }
 
             state.framePosition += Int64(frames)
+            self.removeExpiredComponents(from: state)
             return noErr
         }
 
@@ -265,7 +275,7 @@ final class WaveAudioEngine {
     @discardableResult
     func setPulseHz(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
         enqueueFrequency(
-            componentIndex: Self.primaryPulseComponentIndex,
+            componentIndex: 1,
             value: max(0.01, value),
             durationSeconds: durationSeconds
         )
@@ -274,7 +284,7 @@ final class WaveAudioEngine {
     @discardableResult
     func setWetness(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
         enqueueWetness(
-            componentIndex: Self.primaryPulseComponentIndex,
+            componentIndex: 1,
             value: min(1, max(0, value)),
             durationSeconds: durationSeconds
         )
@@ -285,15 +295,76 @@ final class WaveAudioEngine {
         carrierHz: Double,
         pulseHz: Double,
         wetness: Double,
+        pulseVolume: Double = 1,
+        durationSeconds: Double = 2.0
+    ) -> Bool {
+        applyCarrierHz(carrierHz, durationSeconds: durationSeconds)
+            && applyPulse(
+                at: 0,
+                frequency: pulseHz,
+                wetness: wetness,
+                volume: pulseVolume,
+                durationSeconds: durationSeconds
+            )
+    }
+
+    @discardableResult
+    func applyCarrierHz(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
+        enqueueFrequency(
+            componentIndex: Self.carrierComponentIndex,
+            value: max(200, value),
+            durationSeconds: durationSeconds
+        )
+    }
+
+    @discardableResult
+    func applyPulse(
+        at pulseIndex: Int,
+        frequency: Double,
+        wetness: Double,
+        volume: Double,
         durationSeconds: Double = 2.0
     ) -> Bool {
         commandQueue.enqueue(
             WaveCommand(
                 kind: WaveCommandKind.applyParameters.rawValue,
+                componentIndex: Int32(pulseIndex + 1),
+                value: max(0.01, frequency),
+                value2: min(1, max(0, wetness)),
+                value3: min(1, max(0, volume)),
+                durationSeconds: durationSeconds
+            )
+        )
+    }
+
+    @discardableResult
+    func addPulse(
+        frequency: Double,
+        wetness: Double,
+        targetVolume: Double,
+        durationSeconds: Double = 2.0
+    ) -> Bool {
+        commandQueue.enqueue(
+            WaveCommand(
+                kind: WaveCommandKind.addPulse.rawValue,
                 componentIndex: 0,
-                value: max(200, carrierHz),
-                value2: max(0.01, pulseHz),
-                value3: min(1, max(0, wetness)),
+                value: max(0.01, frequency),
+                value2: min(1, max(0, wetness)),
+                value3: min(1, max(0, targetVolume)),
+                durationSeconds: durationSeconds
+            )
+        )
+    }
+
+    @discardableResult
+    func removePulse(at pulseIndex: Int, durationSeconds: Double = 2.0) -> Bool {
+        commandQueue.enqueue(
+            WaveCommand(
+                kind: WaveCommandKind.removePulse.rawValue,
+                componentIndex: Int32(pulseIndex + 1),
+                value: 0,
+                value2: 0,
+                value3: 0,
                 durationSeconds: durationSeconds
             )
         )
@@ -350,18 +421,20 @@ final class WaveAudioEngine {
                 continue
             }
 
-            guard let component = state.components[safe: Int(command.componentIndex)] else {
-                continue
-            }
-
             switch kind {
             case .setComponentFrequency:
+                guard let component = state.components[safe: Int(command.componentIndex)] else {
+                    continue
+                }
                 component.frequency.scheduleTransition(
                     frame: now,
                     targetValue: command.value,
                     durationFrames: durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
                 )
             case .setComponentWetness:
+                guard let component = state.components[safe: Int(command.componentIndex)] else {
+                    continue
+                }
                 component.wetness.scheduleTransition(
                     frame: now,
                     targetValue: command.value,
@@ -374,26 +447,79 @@ final class WaveAudioEngine {
                     durationFrames: durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
                 )
             case .applyParameters:
+                guard let component = state.components[safe: Int(command.componentIndex)] else {
+                    continue
+                }
                 let durationFrames = durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
-                component.frequency.scheduleTransition(
-                    frame: now,
-                    targetValue: command.value,
-                    durationFrames: durationFrames
-                )
-
-                if let primaryPulse = state.components[safe: Self.primaryPulseComponentIndex] {
-                    primaryPulse.frequency.scheduleTransition(
+                switch component.mode {
+                case .bipolarSine:
+                    component.frequency.scheduleTransition(
+                        frame: now,
+                        targetValue: max(200, command.value),
+                        durationFrames: durationFrames
+                    )
+                case .unipolarPulse:
+                    component.frequency.scheduleTransition(
+                        frame: now,
+                        targetValue: command.value,
+                        durationFrames: durationFrames
+                    )
+                    component.wetness.scheduleTransition(
                         frame: now,
                         targetValue: command.value2,
                         durationFrames: durationFrames
                     )
-                    primaryPulse.wetness.scheduleTransition(
+                    component.volume.scheduleTransition(
                         frame: now,
                         targetValue: command.value3,
                         durationFrames: durationFrames
                     )
                 }
+            case .addPulse:
+                let durationFrames = durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
+                let pulse = ComponentState(
+                    mode: .unipolarPulse,
+                    minimumFrequency: 0.01,
+                    initialFrequency: command.value,
+                    initialWetness: command.value2,
+                    initialVolume: 0
+                )
+                pulse.volume.scheduleTransition(
+                    frame: now,
+                    targetValue: command.value3,
+                    durationFrames: durationFrames
+                )
+                state.components.append(pulse)
+            case .removePulse:
+                guard Int(command.componentIndex) > Self.carrierComponentIndex,
+                      let component = state.components[safe: Int(command.componentIndex)] else {
+                    continue
+                }
+
+                let durationFrames = durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
+                if durationFrames == 0 {
+                    state.components.remove(at: Int(command.componentIndex))
+                } else {
+                    component.volume.scheduleTransition(
+                        frame: now,
+                        targetValue: 0,
+                        durationFrames: durationFrames
+                    )
+                    component.pendingRemovalFrame = now + durationFrames
+                }
             }
+        }
+    }
+
+    private func removeExpiredComponents(from state: RenderState) {
+        let now = state.framePosition
+        state.components.removeAll { component in
+            guard component.mode == .unipolarPulse,
+                  let pendingRemovalFrame = component.pendingRemovalFrame else {
+                return false
+            }
+
+            return now >= pendingRemovalFrame
         }
     }
 
