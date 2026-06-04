@@ -47,9 +47,8 @@ Result:
 - Each parameter row shows current value and inline edit icon.
 - Carrier is always visible and cannot be removed.
 - Pulses use a segmented selector with add/remove icon controls.
-- New pulses are added silently at `0.00` volume so timing and wetness can be staged before ramping contribution up.
-- Pulse 1 is frequency-controlled; pulses 2..n are controlled by an integer `Wavelength Factor` relative to pulse 1, with a minimum factor of `2`.
-- Pulses 2..n derive their phase from pulse 1's shared pulse phase, rather than owning independent phase, so newly-created pulses are immediately aligned to pulse 1's timeline.
+- New pulses are added silently at `0.00` volume so frequency and wetness can be staged before ramping contribution up.
+- Pulse frequencies are independent; each pulse can be edited directly across the `0.01...20 Hz` range.
 - Per-parameter sheet supports:
   - Slider for coarse changes.
   - `- / +` nudge buttons for precise step changes.

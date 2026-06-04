@@ -29,7 +29,6 @@ enum WaveChannel: String, CaseIterable, Identifiable, Codable {
 struct PulseSettings: Identifiable, Equatable, Codable {
     let id: UUID
     var frequency: Double
-    var wavelengthFactor: Double
     var wetness: Double
     var volume: Double
     var isRemoving: Bool
@@ -37,14 +36,12 @@ struct PulseSettings: Identifiable, Equatable, Codable {
     init(
         id: UUID = UUID(),
         frequency: Double = 1,
-        wavelengthFactor: Double = 1,
         wetness: Double = 0,
         volume: Double = 1,
         isRemoving: Bool = false
     ) {
         self.id = id
         self.frequency = frequency
-        self.wavelengthFactor = wavelengthFactor
         self.wetness = wetness
         self.volume = volume
         self.isRemoving = isRemoving
@@ -53,7 +50,6 @@ struct PulseSettings: Identifiable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case id
         case frequency
-        case wavelengthFactor
         case wetness
         case volume
         case isRemoving
@@ -63,7 +59,6 @@ struct PulseSettings: Identifiable, Equatable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         frequency = try container.decode(Double.self, forKey: .frequency)
-        wavelengthFactor = try container.decodeIfPresent(Double.self, forKey: .wavelengthFactor) ?? 1
         wetness = try container.decode(Double.self, forKey: .wetness)
         volume = try container.decode(Double.self, forKey: .volume)
         isRemoving = try container.decodeIfPresent(Bool.self, forKey: .isRemoving) ?? false
@@ -96,7 +91,6 @@ private struct WaveChannelSettings: Equatable, Codable {
             return PulseSettings(
                 id: copiedID,
                 frequency: pulse.frequency,
-                wavelengthFactor: pulse.wavelengthFactor,
                 wetness: pulse.wetness,
                 volume: pulse.volume,
                 isRemoving: false
@@ -114,7 +108,6 @@ private struct WaveChannelSettings: Equatable, Codable {
 @MainActor
 final class WaveGeneratorViewModel: ObservableObject {
     private static let pulseFrequencyRange: ClosedRange<Double> = 0.01...20
-    private static let wavelengthFactorRange: ClosedRange<Double> = 2...128
 
     @Published var isPlaying = false
     @Published private(set) var isStereo = false
@@ -190,24 +183,8 @@ final class WaveGeneratorViewModel: ObservableObject {
         }
     }
 
-    func pulseUsesWavelengthFactor(_ id: PulseSettings.ID, in channel: WaveChannel) -> Bool {
-        guard let index = pulses(for: channel).firstIndex(where: { $0.id == id }) else {
-            return false
-        }
-
-        return index > 0
-    }
-
     func pulseFrequencyRange(for id: PulseSettings.ID, in channel: WaveChannel) -> ClosedRange<Double> {
         Self.pulseFrequencyRange
-    }
-
-    func pulseWavelengthFactorRange(for id: PulseSettings.ID, in channel: WaveChannel) -> ClosedRange<Double> {
-        guard pulseUsesWavelengthFactor(id, in: channel) else {
-            return 1...1
-        }
-
-        return Self.wavelengthFactorRange
     }
 
     func setStereoEnabled(_ enabled: Bool) {
@@ -304,7 +281,6 @@ final class WaveGeneratorViewModel: ObservableObject {
         id: PulseSettings.ID,
         channel: WaveChannel,
         frequency: Double,
-        wavelengthFactor: Double,
         wetness: Double,
         volume: Double
     ) async -> Bool {
@@ -319,7 +295,6 @@ final class WaveGeneratorViewModel: ObservableObject {
         let pulse = PulseSettings(
             id: id,
             frequency: clamp(frequency, in: Self.pulseFrequencyRange),
-            wavelengthFactor: index == 0 ? 1 : clamp(wavelengthFactor.rounded(), in: Self.wavelengthFactorRange),
             wetness: min(1, max(0, wetness)),
             volume: min(1, max(0, volume)),
             isRemoving: settings.pulses[index].isRemoving
@@ -339,7 +314,6 @@ final class WaveGeneratorViewModel: ObservableObject {
                 at: index,
                 channelIndex: engineChannelIndex(for: channel),
                 frequency: normalizedPulse.frequency,
-                wavelengthFactor: normalizedPulse.wavelengthFactor,
                 wetness: normalizedPulse.wetness,
                 volume: normalizedPulse.volume,
                 durationSeconds: durationSeconds
@@ -378,13 +352,8 @@ final class WaveGeneratorViewModel: ObservableObject {
 
         let settings = channelSettings(for: channel)
         let source = settings.pulses.last ?? PulseSettings()
-        let baseFrequency = settings.pulses.first?.frequency ?? source.frequency
-        let wavelengthFactor = settings.pulses.isEmpty
-            ? 1
-            : max(2, (settings.pulses.count == 1 ? 2 : source.wavelengthFactor).rounded())
         let newPulse = PulseSettings(
-            frequency: settings.pulses.isEmpty ? source.frequency : baseFrequency / wavelengthFactor,
-            wavelengthFactor: wavelengthFactor,
+            frequency: source.frequency,
             wetness: source.wetness,
             volume: 0
         )
@@ -393,7 +362,6 @@ final class WaveGeneratorViewModel: ObservableObject {
             audioEngine.addPulse(
                 channelIndex: engineChannelIndex(for: channel),
                 frequency: newPulse.frequency,
-                wavelengthFactor: newPulse.wavelengthFactor,
                 wetness: newPulse.wetness,
                 targetVolume: newPulse.volume,
                 durationSeconds: 0
@@ -543,7 +511,6 @@ final class WaveGeneratorViewModel: ObservableObject {
                     at: index,
                     channelIndex: engineChannelIndex(for: channel),
                     frequency: pulse.frequency,
-                    wavelengthFactor: pulse.wavelengthFactor,
                     wetness: pulse.wetness,
                     volume: pulse.volume,
                     durationSeconds: durationSeconds
@@ -580,7 +547,6 @@ final class WaveGeneratorViewModel: ObservableObject {
             _ = audioEngine.addPulse(
                 channelIndex: channelIndex,
                 frequency: pulse.frequency,
-                wavelengthFactor: pulse.wavelengthFactor,
                 wetness: pulse.wetness,
                 targetVolume: pulse.volume,
                 durationSeconds: 0
@@ -641,41 +607,15 @@ final class WaveGeneratorViewModel: ObservableObject {
     }
 
     private static func normalizedPulses(_ pulses: [PulseSettings]) -> [PulseSettings] {
-        guard let firstPulse = pulses.first else { return [] }
-
-        let baseFrequency = min(
-            Self.pulseFrequencyRange.upperBound,
-            max(Self.pulseFrequencyRange.lowerBound, firstPulse.frequency)
-        )
-        let normalizedFirstPulse = PulseSettings(
-            id: firstPulse.id,
-            frequency: baseFrequency,
-            wavelengthFactor: 1,
-            wetness: min(1, max(0, firstPulse.wetness)),
-            volume: min(1, max(0, firstPulse.volume)),
-            isRemoving: false
-        )
-
-        let derivedPulses = pulses.dropFirst().map { pulse in
-            let migratedFactor = pulse.wavelengthFactor >= Self.wavelengthFactorRange.lowerBound
-                ? pulse.wavelengthFactor
-                : baseFrequency / max(Self.pulseFrequencyRange.lowerBound, pulse.frequency)
-            let wavelengthFactor = min(
-                Self.wavelengthFactorRange.upperBound,
-                max(Self.wavelengthFactorRange.lowerBound, migratedFactor.rounded())
-            )
-
-            return PulseSettings(
+        pulses.map { pulse in
+            PulseSettings(
                 id: pulse.id,
-                frequency: baseFrequency / wavelengthFactor,
-                wavelengthFactor: wavelengthFactor,
+                frequency: clampFrequency(pulse.frequency),
                 wetness: min(1, max(0, pulse.wetness)),
                 volume: min(1, max(0, pulse.volume)),
                 isRemoving: false
             )
         }
-
-        return [normalizedFirstPulse] + derivedPulses
     }
 
     private static func normalizedPulses(
@@ -695,18 +635,12 @@ final class WaveGeneratorViewModel: ObservableObject {
 
         var updatedPulses = pulses
         updatedPulses.remove(at: index)
-        if index == 0, let newFirstPulse = updatedPulses.first {
-            updatedPulses[0] = PulseSettings(
-                id: newFirstPulse.id,
-                frequency: newFirstPulse.frequency,
-                wavelengthFactor: 1,
-                wetness: newFirstPulse.wetness,
-                volume: newFirstPulse.volume,
-                isRemoving: newFirstPulse.isRemoving
-            )
-        }
 
         return normalizedPulses(updatedPulses)
+    }
+
+    private static func clampFrequency(_ frequency: Double) -> Double {
+        min(Self.pulseFrequencyRange.upperBound, max(Self.pulseFrequencyRange.lowerBound, frequency))
     }
 }
 

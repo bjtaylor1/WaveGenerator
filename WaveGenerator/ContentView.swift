@@ -8,7 +8,6 @@ struct ContentView: View {
     enum ParameterEditor: Identifiable {
         case carrier(WaveChannel)
         case pulseFrequency(WaveChannel, PulseSettings.ID)
-        case pulseWavelengthFactor(WaveChannel, PulseSettings.ID)
         case pulseWetness(WaveChannel, PulseSettings.ID)
         case pulseVolume(WaveChannel, PulseSettings.ID)
 
@@ -18,8 +17,6 @@ struct ContentView: View {
                 return "\(channel.rawValue)-carrier"
             case let .pulseFrequency(channel, id):
                 return "\(channel.rawValue)-pulse-frequency-\(id)"
-            case let .pulseWavelengthFactor(channel, id):
-                return "\(channel.rawValue)-pulse-wavelength-factor-\(id)"
             case let .pulseWetness(channel, id):
                 return "\(channel.rawValue)-pulse-wetness-\(id)"
             case let .pulseVolume(channel, id):
@@ -126,29 +123,6 @@ struct ContentView: View {
                     id: id,
                     channel: channel,
                     frequency: value,
-                    wavelengthFactor: pulse.wavelengthFactor,
-                    wetness: pulse.wetness,
-                    volume: pulse.volume
-                )
-            }
-        case let .pulseWavelengthFactor(channel, id):
-            let pulse = viewModel.pulses(for: channel).first(where: { $0.id == id }) ?? PulseSettings(id: id)
-            SingleParameterSheet(
-                title: viewModel.isStereo ? "Edit \(channel.title) Wavelength Factor" : "Edit Wavelength Factor",
-                valueLabel: "Wavelength Factor",
-                unit: "x",
-                sliderRange: viewModel.pulseWavelengthFactorRange(for: id, in: channel),
-                step: 1,
-                nudgeStep: 1,
-                initialValue: pulse.wavelengthFactor,
-                displayedValueFormat: "%.0f",
-                viewModel: viewModel
-            ) { value in
-                await viewModel.applyPulse(
-                    id: id,
-                    channel: channel,
-                    frequency: pulse.frequency,
-                    wavelengthFactor: value,
                     wetness: pulse.wetness,
                     volume: pulse.volume
                 )
@@ -170,7 +144,6 @@ struct ContentView: View {
                     id: id,
                     channel: channel,
                     frequency: pulse.frequency,
-                    wavelengthFactor: pulse.wavelengthFactor,
                     wetness: value,
                     volume: pulse.volume
                 )
@@ -192,7 +165,6 @@ struct ContentView: View {
                     id: id,
                     channel: channel,
                     frequency: pulse.frequency,
-                    wavelengthFactor: pulse.wavelengthFactor,
                     wetness: pulse.wetness,
                     volume: value
                 )
@@ -274,36 +246,19 @@ private struct ChannelSettingsView: View {
                 }
 
                 if let pulse = selectedPulse {
-                    let usesWavelengthFactor = viewModel.pulseUsesWavelengthFactor(pulse.id, in: channel)
                     HStack {
-                        Text(usesWavelengthFactor ? "Wavelength Factor" : "Frequency")
+                        Text("Frequency")
                         Spacer()
-                        if usesWavelengthFactor {
-                            Text("\(pulse.wavelengthFactor, specifier: "%.0f")x, \(pulse.frequency, specifier: "%.3f") Hz")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("\(pulse.frequency, specifier: "%.2f") Hz")
-                                .foregroundStyle(.secondary)
-                        }
+                        Text("\(pulse.frequency, specifier: "%.2f") Hz")
+                            .foregroundStyle(.secondary)
                         Button {
-                            activeEditor = usesWavelengthFactor
-                                ? .pulseWavelengthFactor(channel, pulse.id)
-                                : .pulseFrequency(channel, pulse.id)
+                            activeEditor = .pulseFrequency(channel, pulse.id)
                         } label: {
                             Image(systemName: "pencil")
                         }
                         .buttonStyle(.borderless)
-                        .accessibilityLabel(usesWavelengthFactor ? "Edit Wavelength Factor" : "Edit Pulse Frequency")
+                        .accessibilityLabel("Edit Pulse Frequency")
                         .disabled(viewModel.parameterControlsLocked || pulse.isRemoving)
-                    }
-
-                    if usesWavelengthFactor {
-                        HStack {
-                            Text("Base Frequency")
-                            Spacer()
-                            Text("\(pulses.first?.frequency ?? 0, specifier: "%.2f") Hz")
-                                .foregroundStyle(.secondary)
-                        }
                     }
 
                     HStack {

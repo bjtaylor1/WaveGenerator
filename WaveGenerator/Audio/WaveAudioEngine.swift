@@ -206,7 +206,6 @@ final class WaveAudioEngine {
         var phase: Double = 0
 
         let frequency: RampedParameter
-        let wavelengthFactor: RampedParameter
         let wetness: RampedParameter
         let volume: RampedParameter
         var pendingRemovalFrame: Int64?
@@ -215,49 +214,32 @@ final class WaveAudioEngine {
             mode: ComponentMode,
             minimumFrequency: Double,
             initialFrequency: Double,
-            initialWavelengthFactor: Double = 1,
             initialWetness: Double,
             initialVolume: Double
         ) {
             self.mode = mode
             self.minimumFrequency = minimumFrequency
             self.frequency = RampedParameter(initialValue: initialFrequency)
-            self.wavelengthFactor = RampedParameter(initialValue: initialWavelengthFactor)
             self.wetness = RampedParameter(initialValue: initialWetness)
             self.volume = RampedParameter(initialValue: initialVolume)
         }
 
-        func carrierAmplitude(at frame: Int64, sampleRate: Double) -> Double {
+        func amplitude(at frame: Int64, sampleRate: Double) -> Double {
             let hz = max(minimumFrequency, frequency.value(at: frame))
             phase += 2 * .pi * hz / sampleRate
             if phase >= 2 * .pi {
                 phase.formTruncatingRemainder(dividingBy: 2 * .pi)
             }
 
-            return sin(phase)
-        }
-
-        func advancePulsePhase(at frame: Int64, sampleRate: Double) -> Double {
-            let hz = max(minimumFrequency, frequency.value(at: frame))
-            phase += 2 * .pi * hz / sampleRate
-            return phase
-        }
-
-        func pulseAmplitude(at frame: Int64, basePhase: Double) -> Double {
-            let factor = max(1, wavelengthFactor.value(at: frame))
-            let phaseOffset = 1.5 * .pi * (1 - (1 / factor))
-            let phase = (basePhase / factor) + phaseOffset
-            let wetnessValue = min(1, max(0, wetness.value(at: frame)))
-            let volumeValue = min(1, max(0, volume.value(at: frame)))
-            let pulse = (sin(phase) + 1) * 0.5
-            let envelope = wetnessValue + (1 - wetnessValue) * pulse
-            return 1 + volumeValue * (envelope - 1)
-        }
-
-        func transferPhase(from component: ComponentState) {
-            phase = component.phase
-            if phase >= 2 * .pi {
-                phase.formTruncatingRemainder(dividingBy: 2 * .pi)
+            switch mode {
+            case .bipolarSine:
+                return sin(phase)
+            case .unipolarPulse:
+                let wetnessValue = min(1, max(0, wetness.value(at: frame)))
+                let volumeValue = min(1, max(0, volume.value(at: frame)))
+                let pulse = (sin(phase) + 1) * 0.5
+                let envelope = wetnessValue + (1 - wetnessValue) * pulse
+                return 1 + volumeValue * (envelope - 1)
             }
         }
     }
@@ -288,7 +270,6 @@ final class WaveAudioEngine {
                     mode: .bipolarSine,
                     minimumFrequency: 200,
                     initialFrequency: 500,
-                    initialWavelengthFactor: 1,
                     initialWetness: 0,
                     initialVolume: 1
                 ),
@@ -296,7 +277,6 @@ final class WaveAudioEngine {
                     mode: .unipolarPulse,
                     minimumFrequency: 0.01,
                     initialFrequency: 1,
-                    initialWavelengthFactor: 1,
                     initialWetness: 0,
                     initialVolume: 1
                 ),
@@ -472,7 +452,6 @@ final class WaveAudioEngine {
         at pulseIndex: Int,
         channelIndex: Int = 0,
         frequency: Double,
-        wavelengthFactor: Double = 1,
         wetness: Double,
         volume: Double,
         durationSeconds: Double = 2.0
@@ -483,9 +462,9 @@ final class WaveAudioEngine {
                 channelIndex: Int32(channelIndex),
                 componentIndex: Int32(pulseIndex + 1),
                 value: max(0.01, frequency),
-                value2: max(1, wavelengthFactor),
-                value3: min(1, max(0, wetness)),
-                value4: min(1, max(0, volume)),
+                value2: min(1, max(0, wetness)),
+                value3: min(1, max(0, volume)),
+                value4: 0,
                 durationSeconds: durationSeconds
             )
         )
@@ -495,7 +474,6 @@ final class WaveAudioEngine {
     func addPulse(
         channelIndex: Int = 0,
         frequency: Double,
-        wavelengthFactor: Double = 1,
         wetness: Double,
         targetVolume: Double,
         durationSeconds: Double = 2.0
@@ -506,9 +484,9 @@ final class WaveAudioEngine {
                 channelIndex: Int32(channelIndex),
                 componentIndex: 0,
                 value: max(0.01, frequency),
-                value2: max(1, wavelengthFactor),
-                value3: min(1, max(0, wetness)),
-                value4: min(1, max(0, targetVolume)),
+                value2: min(1, max(0, wetness)),
+                value3: min(1, max(0, targetVolume)),
+                value4: 0,
                 durationSeconds: durationSeconds
             )
         )
@@ -755,32 +733,19 @@ final class WaveAudioEngine {
                         durationFrames: durationFrames
                     )
                 case .unipolarPulse:
-                    if Int(command.componentIndex) == 1 {
-                        component.frequency.scheduleTransition(
-                            frame: now,
-                            targetValue: command.value,
-                            durationFrames: durationFrames
-                        )
-                        component.wavelengthFactor.scheduleTransition(
-                            frame: now,
-                            targetValue: 1,
-                            durationFrames: 0
-                        )
-                    } else {
-                        component.wavelengthFactor.scheduleTransition(
-                            frame: now,
-                            targetValue: max(2, command.value2),
-                            durationFrames: durationFrames
-                        )
-                    }
+                    component.frequency.scheduleTransition(
+                        frame: now,
+                        targetValue: command.value,
+                        durationFrames: durationFrames
+                    )
                     component.wetness.scheduleTransition(
                         frame: now,
-                        targetValue: command.value3,
+                        targetValue: command.value2,
                         durationFrames: durationFrames
                     )
                     component.volume.scheduleTransition(
                         frame: now,
-                        targetValue: command.value4,
+                        targetValue: command.value3,
                         durationFrames: durationFrames
                     )
                 }
@@ -790,18 +755,16 @@ final class WaveAudioEngine {
                 }
 
                 let durationFrames = durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
-                let isPrimaryPulse = channel.components.count == 1
                 let pulse = ComponentState(
                     mode: .unipolarPulse,
                     minimumFrequency: 0.01,
                     initialFrequency: command.value,
-                    initialWavelengthFactor: isPrimaryPulse ? 1 : max(2, command.value2),
-                    initialWetness: command.value3,
+                    initialWetness: command.value2,
                     initialVolume: 0
                 )
                 pulse.volume.scheduleTransition(
                     frame: now,
-                    targetValue: command.value4,
+                    targetValue: command.value3,
                     durationFrames: durationFrames
                 )
                 channel.components.append(pulse)
@@ -852,11 +815,6 @@ final class WaveAudioEngine {
     private func removeComponent(at index: Int, from channel: ChannelState) {
         guard channel.components.indices.contains(index) else { return }
 
-        let removedComponent = channel.components[index]
-        if index == 1, channel.components.indices.contains(index + 1) {
-            channel.components[index + 1].transferPhase(from: removedComponent)
-        }
-
         channel.components.remove(at: index)
     }
 
@@ -871,23 +829,8 @@ final class WaveAudioEngine {
         sampleRate: Double,
         gain: Double
     ) -> Float {
-        var mixedAmplitude = channel.components.first?.carrierAmplitude(
-            at: currentFrame,
-            sampleRate: sampleRate
-        ) ?? 1
-
-        if let primaryPulse = channel.components[safe: 1] {
-            let basePulsePhase = primaryPulse.advancePulsePhase(
-                at: currentFrame,
-                sampleRate: sampleRate
-            )
-
-            for pulse in channel.components.dropFirst() {
-                mixedAmplitude *= pulse.pulseAmplitude(
-                    at: currentFrame,
-                    basePhase: basePulsePhase
-                )
-            }
+        let mixedAmplitude = channel.components.reduce(1.0) { partial, component in
+            partial * component.amplitude(at: currentFrame, sampleRate: sampleRate)
         }
 
         return Float(min(1, max(-1, gain * mixedAmplitude)))

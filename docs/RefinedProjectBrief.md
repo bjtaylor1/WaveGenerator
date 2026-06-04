@@ -5,8 +5,7 @@ Build an iOS app that continuously synthesizes and outputs a waveform to speaker
 
 ## Core Model
 - Carrier frequency (`fc`): always present, constrained to `>= 200 Hz`.
-- Pulse 1 frequency (`fp1`): modulates loudness envelope.
-- Pulses 2..n use an integer wavelength factor relative to pulse 1; effective frequency is `fp1 / factor`.
+- Pulse frequency (`fp`): modulates loudness envelope.
 - Wetness (`w`, `0...1`): controls pulse depth.
   - `w = 1`: constant tone (no pulsing)
   - `w = 0`: full pulse envelope from 0 to 1
@@ -68,8 +67,8 @@ Refinements:
 - Carrier is mandatory and cannot be deleted.
 - Pulse layers are dynamic; the app starts with one pulse, but supports carrier-only output.
 - N pulse layers are multiplied into the output via neutral-at-zero contribution envelopes.
-- Layer introduction rule: create muted layer, allow silent timing/wetness tuning, then ramp layer volume up when desired.
-- Pulses 2..n derive phase from pulse 1's shared pulse phase so integer wavelength factors remain in phase even when a layer is created later.
+- Layer introduction rule: create muted layer, allow silent frequency/wetness tuning, then ramp layer volume up when desired.
+- Pulse layers are independent; each pulse owns its own frequency, phase, wetness, and volume automation.
 
 ## POC Scope (implemented now)
 - Tone output to iPhone/iPad speaker/headphones.
@@ -78,7 +77,7 @@ Refinements:
 - Carrier minimum clamp at 200 Hz.
 - Dynamic pulse add/remove with ramped pulse contribution.
 - Save last minute of generated audio as a WAV file when the stopped-only recording switch is armed.
-- Pulse 1 keeps the direct frequency editor; pulses 2..n use a `Wavelength Factor` editor with minimum factor `2`.
+- Each pulse keeps a direct frequency editor with a `0.01...20 Hz` range.
 
 ## Deferred from POC
 - Modifier persistence/replay files.
