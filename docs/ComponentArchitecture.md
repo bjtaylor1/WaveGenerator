@@ -1,13 +1,13 @@
 # Component Architecture
 
 ## Goal
-Move the audio engine away from a hardcoded `carrier + pulse` render path and toward a list of independently-driven components whose outputs are combined at the end.
+Move the audio engine away from a hardcoded `carrier + pulse` render path and toward a list of components whose outputs are combined at the end.
 
 ## Core Principles
-- Each component owns only its own state.
-- Each component receives only its own parameter commands.
-- A component does not inspect another component's phase, wetness, or command history.
-- The final output is produced by combining component amplitudes after each component has independently evaluated its own amplitude for the current sample time.
+- The carrier owns its own oscillator phase.
+- Pulse 1 owns the shared pulse phase.
+- Pulses 2..n derive their phase from pulse 1 using a wavelength factor, while keeping their own wetness and volume automation.
+- The final output is produced by combining component amplitudes after each component has evaluated its amplitude for the current sample time.
 
 ## Component Model
 Each component should have:
@@ -23,21 +23,22 @@ In the current Swift refactor, the engine starts with two components:
 
 The existing UI maps to those components as follows:
 - `Carrier` edits `components[0].frequency`
-- each pulse edits a dynamic pulse component's frequency, wetness, and volume
+- pulse 1 edits frequency, wetness, and volume
+- pulses 2..n edit wavelength factor, wetness, and volume
 - the app starts with one pulse, but pulses can be removed down to carrier-only output
 
 ## Local Phase
 The intended phase model matches the older C++ engine in `~/wavegen/wavelib`.
 
-For each component, maintain a component-local phase `x`:
+For the carrier and pulse 1, maintain an oscillator phase `x`:
 
 `x_next = x_current + 2 * pi * f / sampleRate`
 
-The component's amplitude is then evaluated from that component-local phase and that component's own parameters.
+The carrier amplitude is evaluated from the carrier phase. Pulse 1 advances the shared pulse phase from its own frequency. Pulses 2..n derive phase as a wavelength multiple of that shared phase, so a layer added later is immediately aligned with pulse 1.
 
 This is important because:
-- modulation should be expressed as a function of the component's own local phase
-- components should remain independent of one another
+- the carrier remains phase-continuous
+- pulse layers remain aligned to one pulse timeline
 - future multi-component support becomes a data-model problem rather than a special-case render-path problem
 
 ## Mixing Rule
@@ -61,7 +62,7 @@ Batch UI operations may still exist, but internally they should decompose into c
 This structure supports the intended roadmap:
 - keep the base component mandatory
 - allow many pulse components
-- keep per-component automation isolated
+- keep per-component wetness/volume automation isolated
 - avoid coupling pulse logic to carrier-cycle inspection
 
 ## Important Caveat

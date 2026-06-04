@@ -20,14 +20,18 @@ private enum WaveCommandKind: Int32 {
     case applyParameters = 3
     case addPulse = 4
     case removePulse = 5
+    case setStereoEnabled = 6
+    case removeAllPulses = 7
 }
 
 private struct WaveCommand {
     var kind: Int32
+    var channelIndex: Int32
     var componentIndex: Int32
     var value: Double
     var value2: Double
     var value3: Double
+    var value4: Double
     var durationSeconds: Double
 }
 
@@ -46,10 +50,12 @@ private final class WaveCommandQueue {
         self.buffer.initialize(
             repeating: WaveCommand(
                 kind: WaveCommandKind.setMasterGain.rawValue,
+                channelIndex: 0,
                 componentIndex: 0,
                 value: 0,
                 value2: 0,
                 value3: 0,
+                value4: 0,
                 durationSeconds: 0
             )
         )
@@ -95,19 +101,27 @@ private final class WaveCommandQueue {
 private struct WaveRecordingSnapshot {
     let samples: [Float]
     let sampleRate: Double
+    let channelCount: Int
+
+    var frameCount: Int {
+        guard channelCount > 0 else { return 0 }
+        return samples.count / channelCount
+    }
 }
 
 private final class WaveRecordingBuffer {
     let sampleRate: Double
+    let channelCount: Int
 
-    private let capacity: Int
+    private let capacityFrames: Int
     private let buffer: UnsafeMutableBufferPointer<Float>
-    private let writeCount = Atomic<Int64>(0)
+    private let writeFrameCount = Atomic<Int64>(0)
 
-    init(sampleRate: Double, durationSeconds: Double) {
+    init(sampleRate: Double, channelCount: Int, durationSeconds: Double) {
         self.sampleRate = sampleRate
-        self.capacity = max(1, Int((sampleRate * durationSeconds).rounded()))
-        self.buffer = UnsafeMutableBufferPointer<Float>.allocate(capacity: capacity)
+        self.channelCount = max(1, channelCount)
+        self.capacityFrames = max(1, Int((sampleRate * durationSeconds).rounded()))
+        self.buffer = UnsafeMutableBufferPointer<Float>.allocate(capacity: capacityFrames * self.channelCount)
         self.buffer.initialize(repeating: 0)
     }
 
@@ -117,23 +131,55 @@ private final class WaveRecordingBuffer {
     }
 
     func append(_ sample: Float) {
-        let write = writeCount.load(ordering: .relaxed)
-        buffer[Int(write % Int64(capacity))] = sample
-        writeCount.store(write + 1, ordering: .releasing)
+        let write = writeFrameCount.load(ordering: .relaxed)
+        let frameIndex = Int(write % Int64(capacityFrames))
+        let offset = frameIndex * channelCount
+        for channel in 0..<channelCount {
+            buffer[offset + channel] = sample
+        }
+        writeFrameCount.store(write + 1, ordering: .releasing)
+    }
+
+    func append(left: Float, right: Float) {
+        let write = writeFrameCount.load(ordering: .relaxed)
+        let frameIndex = Int(write % Int64(capacityFrames))
+        let offset = frameIndex * channelCount
+
+        if channelCount == 1 {
+            buffer[offset] = (left + right) * 0.5
+        } else {
+            buffer[offset] = left
+            buffer[offset + 1] = right
+            if channelCount > 2 {
+                for channel in 2..<channelCount {
+                    buffer[offset + channel] = right
+                }
+            }
+        }
+
+        writeFrameCount.store(write + 1, ordering: .releasing)
     }
 
     func snapshot() -> WaveRecordingSnapshot {
-        let end = writeCount.load(ordering: .acquiring)
-        let count = min(Int(end), capacity)
-        let start = end - Int64(count)
-        var samples = [Float](repeating: 0, count: count)
+        let end = writeFrameCount.load(ordering: .acquiring)
+        let frameCount = min(Int(end), capacityFrames)
+        let start = end - Int64(frameCount)
+        var samples = [Float](repeating: 0, count: frameCount * channelCount)
 
-        for offset in 0..<count {
-            let sourceIndex = Int((start + Int64(offset)) % Int64(capacity))
-            samples[offset] = buffer[sourceIndex]
+        for frameOffset in 0..<frameCount {
+            let sourceFrame = Int((start + Int64(frameOffset)) % Int64(capacityFrames))
+            let sourceOffset = sourceFrame * channelCount
+            let destinationOffset = frameOffset * channelCount
+            for channel in 0..<channelCount {
+                samples[destinationOffset + channel] = buffer[sourceOffset + channel]
+            }
         }
 
-        return WaveRecordingSnapshot(samples: samples, sampleRate: sampleRate)
+        return WaveRecordingSnapshot(
+            samples: samples,
+            sampleRate: sampleRate,
+            channelCount: channelCount
+        )
     }
 }
 
@@ -146,6 +192,8 @@ final class WaveAudioEngine {
     private var sourceNode: AVAudioSourceNode?
     private var recordingBuffer: WaveRecordingBuffer?
     private var isConfigured = false
+    private var isRecordingEnabled = false
+    private var isStereoOutputEnabled = false
 
     private enum ComponentMode {
         case bipolarSine
@@ -158,6 +206,7 @@ final class WaveAudioEngine {
         var phase: Double = 0
 
         let frequency: RampedParameter
+        let wavelengthFactor: RampedParameter
         let wetness: RampedParameter
         let volume: RampedParameter
         var pendingRemovalFrame: Int64?
@@ -166,32 +215,49 @@ final class WaveAudioEngine {
             mode: ComponentMode,
             minimumFrequency: Double,
             initialFrequency: Double,
+            initialWavelengthFactor: Double = 1,
             initialWetness: Double,
             initialVolume: Double
         ) {
             self.mode = mode
             self.minimumFrequency = minimumFrequency
             self.frequency = RampedParameter(initialValue: initialFrequency)
+            self.wavelengthFactor = RampedParameter(initialValue: initialWavelengthFactor)
             self.wetness = RampedParameter(initialValue: initialWetness)
             self.volume = RampedParameter(initialValue: initialVolume)
         }
 
-        func amplitude(at frame: Int64, sampleRate: Double) -> Double {
+        func carrierAmplitude(at frame: Int64, sampleRate: Double) -> Double {
             let hz = max(minimumFrequency, frequency.value(at: frame))
             phase += 2 * .pi * hz / sampleRate
             if phase >= 2 * .pi {
                 phase.formTruncatingRemainder(dividingBy: 2 * .pi)
             }
 
-            switch mode {
-            case .bipolarSine:
-                return sin(phase)
-            case .unipolarPulse:
-                let wetnessValue = min(1, max(0, wetness.value(at: frame)))
-                let volumeValue = min(1, max(0, volume.value(at: frame)))
-                let pulse = (sin(phase) + 1) * 0.5
-                let envelope = wetnessValue + (1 - wetnessValue) * pulse
-                return 1 + volumeValue * (envelope - 1)
+            return sin(phase)
+        }
+
+        func advancePulsePhase(at frame: Int64, sampleRate: Double) -> Double {
+            let hz = max(minimumFrequency, frequency.value(at: frame))
+            phase += 2 * .pi * hz / sampleRate
+            return phase
+        }
+
+        func pulseAmplitude(at frame: Int64, basePhase: Double) -> Double {
+            let factor = max(1, wavelengthFactor.value(at: frame))
+            let phaseOffset = 1.5 * .pi * (1 - (1 / factor))
+            let phase = (basePhase / factor) + phaseOffset
+            let wetnessValue = min(1, max(0, wetness.value(at: frame)))
+            let volumeValue = min(1, max(0, volume.value(at: frame)))
+            let pulse = (sin(phase) + 1) * 0.5
+            let envelope = wetnessValue + (1 - wetnessValue) * pulse
+            return 1 + volumeValue * (envelope - 1)
+        }
+
+        func transferPhase(from component: ComponentState) {
+            phase = component.phase
+            if phase >= 2 * .pi {
+                phase.formTruncatingRemainder(dividingBy: 2 * .pi)
             }
         }
     }
@@ -199,17 +265,30 @@ final class WaveAudioEngine {
     private final class RenderState {
         let sampleRate: Double
         var framePosition: Int64 = 0
-        var components: [ComponentState]
+        var isStereo = false
+        var channels: [ChannelState]
 
         let masterGain = RampedParameter(initialValue: 0)
 
         init(sampleRate: Double) {
             self.sampleRate = sampleRate
+            self.channels = [
+                ChannelState(),
+                ChannelState(),
+            ]
+        }
+    }
+
+    private final class ChannelState {
+        var components: [ComponentState]
+
+        init() {
             self.components = [
                 ComponentState(
                     mode: .bipolarSine,
                     minimumFrequency: 200,
                     initialFrequency: 500,
+                    initialWavelengthFactor: 1,
                     initialWetness: 0,
                     initialVolume: 1
                 ),
@@ -217,6 +296,7 @@ final class WaveAudioEngine {
                     mode: .unipolarPulse,
                     minimumFrequency: 0.01,
                     initialFrequency: 1,
+                    initialWavelengthFactor: 1,
                     initialWetness: 0,
                     initialVolume: 1
                 ),
@@ -274,16 +354,31 @@ final class WaveAudioEngine {
             for frameOffset in 0..<frames {
                 let currentFrame = state.framePosition + Int64(frameOffset)
                 let gain = min(1, max(0, state.masterGain.value(at: currentFrame)))
-                let mixedAmplitude = state.components.reduce(1.0) { partial, component in
-                    partial * component.amplitude(at: currentFrame, sampleRate: state.sampleRate)
-                }
-                let sample = Float(min(1, max(-1, gain * mixedAmplitude)))
-                self.recordingBuffer?.append(sample)
+                let leftSample = self.renderSample(
+                    from: state.channels[0],
+                    at: currentFrame,
+                    sampleRate: state.sampleRate,
+                    gain: gain
+                )
+                let rightSample = state.isStereo
+                    ? self.renderSample(
+                        from: state.channels[1],
+                        at: currentFrame,
+                        sampleRate: state.sampleRate,
+                        gain: gain
+                    )
+                    : leftSample
 
-                for buffer in bufferList {
+                if state.isStereo {
+                    self.recordingBuffer?.append(left: leftSample, right: rightSample)
+                } else {
+                    self.recordingBuffer?.append(leftSample)
+                }
+
+                for (channelIndex, buffer) in bufferList.enumerated() {
                     guard let mData = buffer.mData else { continue }
                     let channel = mData.assumingMemoryBound(to: Float.self)
-                    channel[frameOffset] = sample
+                    channel[frameOffset] = channelIndex == 0 ? leftSample : rightSample
                 }
             }
 
@@ -313,6 +408,7 @@ final class WaveAudioEngine {
     @discardableResult
     func setCarrierHz(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
         enqueueFrequency(
+            channelIndex: 0,
             componentIndex: Self.carrierComponentIndex,
             value: max(200, value),
             durationSeconds: durationSeconds
@@ -322,6 +418,7 @@ final class WaveAudioEngine {
     @discardableResult
     func setPulseHz(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
         enqueueFrequency(
+            channelIndex: 0,
             componentIndex: 1,
             value: max(0.01, value),
             durationSeconds: durationSeconds
@@ -331,6 +428,7 @@ final class WaveAudioEngine {
     @discardableResult
     func setWetness(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
         enqueueWetness(
+            channelIndex: 0,
             componentIndex: 1,
             value: min(1, max(0, value)),
             durationSeconds: durationSeconds
@@ -356,8 +454,13 @@ final class WaveAudioEngine {
     }
 
     @discardableResult
-    func applyCarrierHz(_ value: Double, durationSeconds: Double = 2.0) -> Bool {
+    func applyCarrierHz(
+        _ value: Double,
+        channelIndex: Int = 0,
+        durationSeconds: Double = 2.0
+    ) -> Bool {
         enqueueFrequency(
+            channelIndex: channelIndex,
             componentIndex: Self.carrierComponentIndex,
             value: max(200, value),
             durationSeconds: durationSeconds
@@ -367,7 +470,9 @@ final class WaveAudioEngine {
     @discardableResult
     func applyPulse(
         at pulseIndex: Int,
+        channelIndex: Int = 0,
         frequency: Double,
+        wavelengthFactor: Double = 1,
         wetness: Double,
         volume: Double,
         durationSeconds: Double = 2.0
@@ -375,10 +480,12 @@ final class WaveAudioEngine {
         commandQueue.enqueue(
             WaveCommand(
                 kind: WaveCommandKind.applyParameters.rawValue,
+                channelIndex: Int32(channelIndex),
                 componentIndex: Int32(pulseIndex + 1),
                 value: max(0.01, frequency),
-                value2: min(1, max(0, wetness)),
-                value3: min(1, max(0, volume)),
+                value2: max(1, wavelengthFactor),
+                value3: min(1, max(0, wetness)),
+                value4: min(1, max(0, volume)),
                 durationSeconds: durationSeconds
             )
         )
@@ -386,7 +493,9 @@ final class WaveAudioEngine {
 
     @discardableResult
     func addPulse(
+        channelIndex: Int = 0,
         frequency: Double,
+        wavelengthFactor: Double = 1,
         wetness: Double,
         targetVolume: Double,
         durationSeconds: Double = 2.0
@@ -394,25 +503,70 @@ final class WaveAudioEngine {
         commandQueue.enqueue(
             WaveCommand(
                 kind: WaveCommandKind.addPulse.rawValue,
+                channelIndex: Int32(channelIndex),
                 componentIndex: 0,
                 value: max(0.01, frequency),
-                value2: min(1, max(0, wetness)),
-                value3: min(1, max(0, targetVolume)),
+                value2: max(1, wavelengthFactor),
+                value3: min(1, max(0, wetness)),
+                value4: min(1, max(0, targetVolume)),
                 durationSeconds: durationSeconds
             )
         )
     }
 
     @discardableResult
-    func removePulse(at pulseIndex: Int, durationSeconds: Double = 2.0) -> Bool {
+    func removePulse(
+        at pulseIndex: Int,
+        channelIndex: Int = 0,
+        durationSeconds: Double = 2.0
+    ) -> Bool {
         commandQueue.enqueue(
             WaveCommand(
                 kind: WaveCommandKind.removePulse.rawValue,
+                channelIndex: Int32(channelIndex),
                 componentIndex: Int32(pulseIndex + 1),
                 value: 0,
                 value2: 0,
                 value3: 0,
+                value4: 0,
                 durationSeconds: durationSeconds
+            )
+        )
+    }
+
+    @discardableResult
+    func removeAllPulses(channelIndex: Int = 0) -> Bool {
+        commandQueue.enqueue(
+            WaveCommand(
+                kind: WaveCommandKind.removeAllPulses.rawValue,
+                channelIndex: Int32(channelIndex),
+                componentIndex: 0,
+                value: 0,
+                value2: 0,
+                value3: 0,
+                value4: 0,
+                durationSeconds: 0
+            )
+        )
+    }
+
+    @discardableResult
+    func setStereoEnabled(_ isEnabled: Bool) -> Bool {
+        isStereoOutputEnabled = isEnabled
+        if isRecordingEnabled {
+            setRecordingEnabled(true)
+        }
+
+        return commandQueue.enqueue(
+            WaveCommand(
+                kind: WaveCommandKind.setStereoEnabled.rawValue,
+                channelIndex: 0,
+                componentIndex: 0,
+                value: isEnabled ? 1 : 0,
+                value2: 0,
+                value3: 0,
+                value4: 0,
+                durationSeconds: 0
             )
         )
     }
@@ -422,6 +576,7 @@ final class WaveAudioEngine {
     }
 
     func setRecordingEnabled(_ isEnabled: Bool) {
+        isRecordingEnabled = isEnabled
         guard isEnabled else {
             recordingBuffer = nil
             return
@@ -430,6 +585,7 @@ final class WaveAudioEngine {
         let sampleRate = renderState?.sampleRate ?? AVAudioSession.sharedInstance().sampleRate
         recordingBuffer = WaveRecordingBuffer(
             sampleRate: sampleRate > 0 ? sampleRate : 48_000,
+            channelCount: isStereoOutputEnabled ? 2 : 1,
             durationSeconds: 60
         )
     }
@@ -444,7 +600,7 @@ final class WaveAudioEngine {
         }
 
         let snapshot = recordingBuffer.snapshot()
-        guard !snapshot.samples.isEmpty else {
+        guard snapshot.frameCount > 0 else {
             throw NSError(
                 domain: "WaveAudioEngine",
                 code: -3,
@@ -461,7 +617,7 @@ final class WaveAudioEngine {
         let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: snapshot.sampleRate,
-            channels: 1,
+            channels: AVAudioChannelCount(snapshot.channelCount),
             interleaved: false
         )!
         let file = try AVAudioFile(
@@ -470,7 +626,7 @@ final class WaveAudioEngine {
         )
         guard let pcmBuffer = AVAudioPCMBuffer(
             pcmFormat: format,
-            frameCapacity: AVAudioFrameCount(snapshot.samples.count)
+            frameCapacity: AVAudioFrameCount(snapshot.frameCount)
         ) else {
             throw NSError(
                 domain: "WaveAudioEngine",
@@ -479,11 +635,13 @@ final class WaveAudioEngine {
             )
         }
 
-        pcmBuffer.frameLength = AVAudioFrameCount(snapshot.samples.count)
-        snapshot.samples.withUnsafeBufferPointer { samples in
-            if let source = samples.baseAddress,
-               let destination = pcmBuffer.floatChannelData?[0] {
-                destination.update(from: source, count: snapshot.samples.count)
+        pcmBuffer.frameLength = AVAudioFrameCount(snapshot.frameCount)
+        if let channelData = pcmBuffer.floatChannelData {
+            for frame in 0..<snapshot.frameCount {
+                let sourceOffset = frame * snapshot.channelCount
+                for channel in 0..<snapshot.channelCount {
+                    channelData[channel][frame] = snapshot.samples[sourceOffset + channel]
+                }
             }
         }
 
@@ -491,27 +649,41 @@ final class WaveAudioEngine {
         return url
     }
 
-    private func enqueueFrequency(componentIndex: Int, value: Double, durationSeconds: Double) -> Bool {
+    private func enqueueFrequency(
+        channelIndex: Int,
+        componentIndex: Int,
+        value: Double,
+        durationSeconds: Double
+    ) -> Bool {
         commandQueue.enqueue(
             WaveCommand(
                 kind: WaveCommandKind.setComponentFrequency.rawValue,
+                channelIndex: Int32(channelIndex),
                 componentIndex: Int32(componentIndex),
                 value: value,
                 value2: 0,
                 value3: 0,
+                value4: 0,
                 durationSeconds: durationSeconds
             )
         )
     }
 
-    private func enqueueWetness(componentIndex: Int, value: Double, durationSeconds: Double) -> Bool {
+    private func enqueueWetness(
+        channelIndex: Int,
+        componentIndex: Int,
+        value: Double,
+        durationSeconds: Double
+    ) -> Bool {
         commandQueue.enqueue(
             WaveCommand(
                 kind: WaveCommandKind.setComponentWetness.rawValue,
+                channelIndex: Int32(channelIndex),
                 componentIndex: Int32(componentIndex),
                 value: value,
                 value2: 0,
                 value3: 0,
+                value4: 0,
                 durationSeconds: durationSeconds
             )
         )
@@ -521,10 +693,12 @@ final class WaveAudioEngine {
         commandQueue.enqueue(
             WaveCommand(
                 kind: WaveCommandKind.setMasterGain.rawValue,
+                channelIndex: 0,
                 componentIndex: 0,
                 value: value,
                 value2: 0,
                 value3: 0,
+                value4: 0,
                 durationSeconds: durationSeconds
             )
         )
@@ -540,7 +714,8 @@ final class WaveAudioEngine {
 
             switch kind {
             case .setComponentFrequency:
-                guard let component = state.components[safe: Int(command.componentIndex)] else {
+                guard let channel = state.channels[safe: Int(command.channelIndex)],
+                      let component = channel.components[safe: Int(command.componentIndex)] else {
                     continue
                 }
                 component.frequency.scheduleTransition(
@@ -549,7 +724,8 @@ final class WaveAudioEngine {
                     durationFrames: durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
                 )
             case .setComponentWetness:
-                guard let component = state.components[safe: Int(command.componentIndex)] else {
+                guard let channel = state.channels[safe: Int(command.channelIndex)],
+                      let component = channel.components[safe: Int(command.componentIndex)] else {
                     continue
                 }
                 component.wetness.scheduleTransition(
@@ -557,6 +733,8 @@ final class WaveAudioEngine {
                     targetValue: command.value,
                     durationFrames: durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
                 )
+            case .setStereoEnabled:
+                state.isStereo = command.value > 0
             case .setMasterGain:
                 state.masterGain.scheduleTransition(
                     frame: now,
@@ -564,7 +742,8 @@ final class WaveAudioEngine {
                     durationFrames: durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
                 )
             case .applyParameters:
-                guard let component = state.components[safe: Int(command.componentIndex)] else {
+                guard let channel = state.channels[safe: Int(command.channelIndex)],
+                      let component = channel.components[safe: Int(command.componentIndex)] else {
                     continue
                 }
                 let durationFrames = durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
@@ -576,46 +755,66 @@ final class WaveAudioEngine {
                         durationFrames: durationFrames
                     )
                 case .unipolarPulse:
-                    component.frequency.scheduleTransition(
-                        frame: now,
-                        targetValue: command.value,
-                        durationFrames: durationFrames
-                    )
+                    if Int(command.componentIndex) == 1 {
+                        component.frequency.scheduleTransition(
+                            frame: now,
+                            targetValue: command.value,
+                            durationFrames: durationFrames
+                        )
+                        component.wavelengthFactor.scheduleTransition(
+                            frame: now,
+                            targetValue: 1,
+                            durationFrames: 0
+                        )
+                    } else {
+                        component.wavelengthFactor.scheduleTransition(
+                            frame: now,
+                            targetValue: max(2, command.value2),
+                            durationFrames: durationFrames
+                        )
+                    }
                     component.wetness.scheduleTransition(
-                        frame: now,
-                        targetValue: command.value2,
-                        durationFrames: durationFrames
-                    )
-                    component.volume.scheduleTransition(
                         frame: now,
                         targetValue: command.value3,
                         durationFrames: durationFrames
                     )
+                    component.volume.scheduleTransition(
+                        frame: now,
+                        targetValue: command.value4,
+                        durationFrames: durationFrames
+                    )
                 }
             case .addPulse:
+                guard let channel = state.channels[safe: Int(command.channelIndex)] else {
+                    continue
+                }
+
                 let durationFrames = durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
+                let isPrimaryPulse = channel.components.count == 1
                 let pulse = ComponentState(
                     mode: .unipolarPulse,
                     minimumFrequency: 0.01,
                     initialFrequency: command.value,
-                    initialWetness: command.value2,
+                    initialWavelengthFactor: isPrimaryPulse ? 1 : max(2, command.value2),
+                    initialWetness: command.value3,
                     initialVolume: 0
                 )
                 pulse.volume.scheduleTransition(
                     frame: now,
-                    targetValue: command.value3,
+                    targetValue: command.value4,
                     durationFrames: durationFrames
                 )
-                state.components.append(pulse)
+                channel.components.append(pulse)
             case .removePulse:
-                guard Int(command.componentIndex) > Self.carrierComponentIndex,
-                      let component = state.components[safe: Int(command.componentIndex)] else {
+                guard let channel = state.channels[safe: Int(command.channelIndex)],
+                      Int(command.componentIndex) > Self.carrierComponentIndex,
+                      let component = channel.components[safe: Int(command.componentIndex)] else {
                     continue
                 }
 
                 let durationFrames = durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
                 if durationFrames == 0 {
-                    state.components.remove(at: Int(command.componentIndex))
+                    removeComponent(at: Int(command.componentIndex), from: channel)
                 } else {
                     component.volume.scheduleTransition(
                         frame: now,
@@ -624,20 +823,74 @@ final class WaveAudioEngine {
                     )
                     component.pendingRemovalFrame = now + durationFrames
                 }
+            case .removeAllPulses:
+                guard let channel = state.channels[safe: Int(command.channelIndex)] else {
+                    continue
+                }
+                removeAllPulses(from: channel)
             }
         }
     }
 
     private func removeExpiredComponents(from state: RenderState) {
         let now = state.framePosition
-        state.components.removeAll { component in
-            guard component.mode == .unipolarPulse,
-                  let pendingRemovalFrame = component.pendingRemovalFrame else {
-                return false
-            }
+        for channel in state.channels {
+            var index = channel.components.count - 1
+            while index > Self.carrierComponentIndex {
+                let component = channel.components[index]
+                if component.mode == .unipolarPulse,
+                   let pendingRemovalFrame = component.pendingRemovalFrame,
+                   now >= pendingRemovalFrame {
+                    removeComponent(at: index, from: channel)
+                }
 
-            return now >= pendingRemovalFrame
+                index -= 1
+            }
         }
+    }
+
+    private func removeComponent(at index: Int, from channel: ChannelState) {
+        guard channel.components.indices.contains(index) else { return }
+
+        let removedComponent = channel.components[index]
+        if index == 1, channel.components.indices.contains(index + 1) {
+            channel.components[index + 1].transferPhase(from: removedComponent)
+        }
+
+        channel.components.remove(at: index)
+    }
+
+    private func removeAllPulses(from channel: ChannelState) {
+        guard channel.components.count > 1 else { return }
+        channel.components.removeSubrange(1..<channel.components.count)
+    }
+
+    private func renderSample(
+        from channel: ChannelState,
+        at currentFrame: Int64,
+        sampleRate: Double,
+        gain: Double
+    ) -> Float {
+        var mixedAmplitude = channel.components.first?.carrierAmplitude(
+            at: currentFrame,
+            sampleRate: sampleRate
+        ) ?? 1
+
+        if let primaryPulse = channel.components[safe: 1] {
+            let basePulsePhase = primaryPulse.advancePulsePhase(
+                at: currentFrame,
+                sampleRate: sampleRate
+            )
+
+            for pulse in channel.components.dropFirst() {
+                mixedAmplitude *= pulse.pulseAmplitude(
+                    at: currentFrame,
+                    basePhase: basePulsePhase
+                )
+            }
+        }
+
+        return Float(min(1, max(-1, gain * mixedAmplitude)))
     }
 
     private func durationToFrames(_ seconds: Double, sampleRate: Double) -> Int64 {
