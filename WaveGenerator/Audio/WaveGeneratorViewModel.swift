@@ -107,7 +107,7 @@ private struct WaveChannelSettings: Equatable, Codable {
 
 @MainActor
 final class WaveGeneratorViewModel: ObservableObject {
-    private static let pulseFrequencyRange: ClosedRange<Double> = 0.01...20
+    private static let pulseFrequencyRange: ClosedRange<Double> = 0...5
 
     @Published var isPlaying = false
     @Published private(set) var isStereo = false

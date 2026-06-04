@@ -20,7 +20,7 @@ Each component should have:
 
 In the current Swift refactor, the engine starts with two components:
 - `components[0]`: mandatory base component, minimum frequency `200 Hz`
-- `components[1]`: primary pulse component, minimum frequency `0.01 Hz`
+- `components[1]`: primary pulse component, minimum frequency `0 Hz`
 
 The existing UI maps to those components as follows:
 - `Carrier` edits `components[0].frequency`

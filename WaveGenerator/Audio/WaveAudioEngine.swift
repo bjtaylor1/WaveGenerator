@@ -275,7 +275,7 @@ final class WaveAudioEngine {
                 ),
                 ComponentState(
                     mode: .unipolarPulse,
-                    minimumFrequency: 0.01,
+                    minimumFrequency: 0,
                     initialFrequency: 1,
                     initialWetness: 0,
                     initialVolume: 1
@@ -334,31 +334,33 @@ final class WaveAudioEngine {
             for frameOffset in 0..<frames {
                 let currentFrame = state.framePosition + Int64(frameOffset)
                 let gain = min(1, max(0, state.masterGain.value(at: currentFrame)))
-                let leftSample = self.renderSample(
+                let uiLeftSample = self.renderSample(
                     from: state.channels[0],
                     at: currentFrame,
                     sampleRate: state.sampleRate,
                     gain: gain
                 )
-                let rightSample = state.isStereo
+                let uiRightSample = state.isStereo
                     ? self.renderSample(
                         from: state.channels[1],
                         at: currentFrame,
                         sampleRate: state.sampleRate,
                         gain: gain
                     )
-                    : leftSample
+                    : uiLeftSample
+                let outputLeftSample = state.isStereo ? uiRightSample : uiLeftSample
+                let outputRightSample = state.isStereo ? uiLeftSample : uiRightSample
 
                 if state.isStereo {
-                    self.recordingBuffer?.append(left: leftSample, right: rightSample)
+                    self.recordingBuffer?.append(left: outputLeftSample, right: outputRightSample)
                 } else {
-                    self.recordingBuffer?.append(leftSample)
+                    self.recordingBuffer?.append(outputLeftSample)
                 }
 
                 for (channelIndex, buffer) in bufferList.enumerated() {
                     guard let mData = buffer.mData else { continue }
                     let channel = mData.assumingMemoryBound(to: Float.self)
-                    channel[frameOffset] = channelIndex == 0 ? leftSample : rightSample
+                    channel[frameOffset] = channelIndex == 0 ? outputLeftSample : outputRightSample
                 }
             }
 
@@ -400,7 +402,7 @@ final class WaveAudioEngine {
         enqueueFrequency(
             channelIndex: 0,
             componentIndex: 1,
-            value: max(0.01, value),
+            value: max(0, value),
             durationSeconds: durationSeconds
         )
     }
@@ -461,7 +463,7 @@ final class WaveAudioEngine {
                 kind: WaveCommandKind.applyParameters.rawValue,
                 channelIndex: Int32(channelIndex),
                 componentIndex: Int32(pulseIndex + 1),
-                value: max(0.01, frequency),
+                value: max(0, frequency),
                 value2: min(1, max(0, wetness)),
                 value3: min(1, max(0, volume)),
                 value4: 0,
@@ -483,7 +485,7 @@ final class WaveAudioEngine {
                 kind: WaveCommandKind.addPulse.rawValue,
                 channelIndex: Int32(channelIndex),
                 componentIndex: 0,
-                value: max(0.01, frequency),
+                value: max(0, frequency),
                 value2: min(1, max(0, wetness)),
                 value3: min(1, max(0, targetVolume)),
                 value4: 0,
@@ -757,7 +759,7 @@ final class WaveAudioEngine {
                 let durationFrames = durationToFrames(command.durationSeconds, sampleRate: state.sampleRate)
                 let pulse = ComponentState(
                     mode: .unipolarPulse,
-                    minimumFrequency: 0.01,
+                    minimumFrequency: 0,
                     initialFrequency: command.value,
                     initialWetness: command.value2,
                     initialVolume: 0

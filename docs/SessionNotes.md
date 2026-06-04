@@ -48,7 +48,7 @@ Result:
 - Carrier is always visible and cannot be removed.
 - Pulses use a segmented selector with add/remove icon controls.
 - New pulses are added silently at `0.00` volume so frequency and wetness can be staged before ramping contribution up.
-- Pulse frequencies are independent; each pulse can be edited directly across the `0.01...20 Hz` range.
+- Pulse frequencies are independent; each pulse can be edited directly across the `0...5 Hz` range.
 - Per-parameter sheet supports:
   - Slider for coarse changes.
   - `- / +` nudge buttons for precise step changes.
