@@ -60,6 +60,8 @@ struct ContentView: View {
         .onAppear {
             viewModel.configureAudio()
         }
+        .blur(radius: activeEditor == nil ? 0 : 3)
+        .opacity(activeEditor == nil ? 1 : 0.65)
         .sheet(isPresented: $isSettingsPresented) {
             SettingsSheet(viewModel: viewModel)
         }

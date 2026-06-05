@@ -110,6 +110,22 @@ struct SingleParameterSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                Section {
+                    Button {
+                        applyDraftValue()
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Text(viewModel.isApplyingSettings ? "Applying..." : "Apply")
+                                .fontWeight(.semibold)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(controlsLocked)
+                }
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
@@ -119,21 +135,10 @@ struct SingleParameterSheet: View {
                         dismiss()
                     }
                 }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(viewModel.isApplyingSettings ? "Applying..." : "Apply") {
-                        Task {
-                            let applied = await applyValue(draftValue)
-                            if applied {
-                                dismiss()
-                            }
-                        }
-                    }
-                    .disabled(controlsLocked)
-                }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
     }
 
     private var controlsLocked: Bool {
@@ -143,6 +148,15 @@ struct SingleParameterSheet: View {
     private func nudge(by delta: Double) {
         let next = draftValue + delta
         draftValue = Self.normalize(value: next, in: sliderRange, step: step)
+    }
+
+    private func applyDraftValue() {
+        Task {
+            let applied = await applyValue(draftValue)
+            if applied {
+                dismiss()
+            }
+        }
     }
 
     private static func normalize(value: Double, in range: ClosedRange<Double>, step: Double) -> Double {
