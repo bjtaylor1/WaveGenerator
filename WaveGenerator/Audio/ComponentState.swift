@@ -1,6 +1,6 @@
 import Foundation
 
-final class ComponentState {
+nonisolated final class ComponentState {
     let mode: ComponentMode
     let minimumFrequency: Double
     var phase: Double = 0

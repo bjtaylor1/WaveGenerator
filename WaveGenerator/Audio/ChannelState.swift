@@ -1,4 +1,4 @@
-final class ChannelState {
+nonisolated final class ChannelState {
     var components: [ComponentState]
 
     init() {

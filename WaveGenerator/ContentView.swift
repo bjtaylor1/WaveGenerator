@@ -49,6 +49,7 @@ struct ContentView: View {
                     } label: {
                         Label("Settings", systemImage: "gearshape")
                     }
+                    .disabled(viewModel.isPlaying)
 
                     Button {
                         isHistoryPresented = true
@@ -59,11 +60,11 @@ struct ContentView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(viewModel.isPlaying ? "Stop Tone" : "Start Tone") {
+                    Button(viewModel.playbackButtonTitle) {
                         viewModel.togglePlayback()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!viewModel.isPlaying && viewModel.parameterControlsLocked)
+                    .disabled(viewModel.playbackButtonDisabled)
                 }
             }
         }

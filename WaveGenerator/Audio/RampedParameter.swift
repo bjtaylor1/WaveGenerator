@@ -1,6 +1,6 @@
 import Foundation
 
-final class RampedParameter {
+nonisolated final class RampedParameter {
     private(set) var settledValue: Double
     private var activeModifier: ParameterModifier?
 

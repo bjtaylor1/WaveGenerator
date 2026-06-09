@@ -1,10 +1,10 @@
-enum WaveChannel: String, CaseIterable, Identifiable, Codable {
+enum WaveChannel: String, CaseIterable, Identifiable, Codable, Sendable {
     case left
     case right
 
-    var id: Self { self }
+    nonisolated var id: Self { self }
 
-    var title: String {
+    nonisolated var title: String {
         switch self {
         case .left:
             return "Left"
@@ -13,7 +13,7 @@ enum WaveChannel: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    var engineChannelIndex: Int {
+    nonisolated var engineChannelIndex: Int {
         switch self {
         case .left:
             return 0

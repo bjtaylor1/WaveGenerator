@@ -16,10 +16,14 @@ final class WaveGeneratorViewModel: ObservableObject {
     @Published private(set) var isQueueSaturated = false
     @Published private(set) var isApplyingSettings = false
     @Published private(set) var sessionHistory: [WaveSessionRecord] = []
+    @Published private(set) var isFilePlaybackActive = false
+    @Published private(set) var isRenderingSessionWAV = false
+    @Published private(set) var lastRenderedWAVURL: URL?
     @Published var sessionHistoryErrorMessage: String?
 
     private let audioEngine = WaveAudioEngine()
     private var queueMonitorTask: Task<Void, Never>?
+    private var filePlaybackTask: Task<Void, Never>?
     private let settingsStore = WaveSettingsStore()
     private let sessionHistoryStore = WaveSessionHistoryStore()
     private let sessionRecorder = WaveSessionRecorder()
@@ -31,11 +35,27 @@ final class WaveGeneratorViewModel: ObservableObject {
     }
 
     var parameterControlsLocked: Bool {
-        isApplyingSettings || isQueueSaturated
+        isApplyingSettings || isQueueSaturated || isFilePlaybackActive
     }
 
     var settingsSheetLocked: Bool {
         isPlaying || parameterControlsLocked
+    }
+
+    var sessionFileActionsLocked: Bool {
+        isPlaying || isApplyingSettings || isQueueSaturated || isRenderingSessionWAV
+    }
+
+    var playbackButtonTitle: String {
+        if isFilePlaybackActive {
+            return "Stop File"
+        }
+
+        return isPlaying ? "Stop Tone" : "Start Tone"
+    }
+
+    var playbackButtonDisabled: Bool {
+        !isPlaying && parameterControlsLocked
     }
 
     func carrierHz(for channel: WaveChannel) -> Double {
@@ -120,7 +140,7 @@ final class WaveGeneratorViewModel: ObservableObject {
     }
 
     func startPlayback() {
-        guard !isPlaying, !isApplyingSettings, !isQueueSaturated else { return }
+        guard !isPlaying, !isFilePlaybackActive, !isApplyingSettings, !isQueueSaturated else { return }
 
         let timeline = audioEngine.timelineSnapshot()
         let transitionFrameCount = audioEngine.durationFrames(for: transitionSeconds)
@@ -135,6 +155,11 @@ final class WaveGeneratorViewModel: ObservableObject {
     }
 
     func togglePlayback() {
+        if isFilePlaybackActive {
+            stopFilePlayback()
+            return
+        }
+
         if isPlaying {
             stopPlayback()
         } else {
@@ -356,8 +381,45 @@ final class WaveGeneratorViewModel: ObservableObject {
         sessionHistoryErrorMessage = error.localizedDescription
     }
 
+    func playHistorySession(_ session: WaveSessionRecord) async -> Bool {
+        await playSession(WaveSessionExport(session: session))
+    }
+
+    func playSessionFile(at url: URL) async -> Bool {
+        do {
+            let session = try WaveSessionFileLoader.load(from: url)
+            return await playSession(session)
+        } catch {
+            sessionHistoryErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func renderHistorySessionWAV(_ session: WaveSessionRecord) async -> Bool {
+        await renderSessionWAV(WaveSessionExport(session: session))
+    }
+
+    func renderSessionFileWAV(at url: URL) async -> Bool {
+        do {
+            let session = try WaveSessionFileLoader.load(from: url)
+            return await renderSessionWAV(session)
+        } catch {
+            sessionHistoryErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func stopFilePlayback() {
+        guard isFilePlaybackActive else { return }
+
+        filePlaybackTask?.cancel()
+        filePlaybackTask = nil
+        finishFilePlayback(restoreSettings: true, stopTone: true)
+    }
+
     deinit {
         queueMonitorTask?.cancel()
+        filePlaybackTask?.cancel()
     }
 
     private func startQueueMonitor() {
@@ -394,6 +456,246 @@ final class WaveGeneratorViewModel: ObservableObject {
         }
 
         return nil
+    }
+
+    private func playSession(_ session: WaveSessionExport) async -> Bool {
+        guard !isPlaying, !isRenderingSessionWAV, !isApplyingSettings, !isQueueSaturated else {
+            return false
+        }
+
+        sessionHistoryErrorMessage = nil
+        let restoreSnapshot = currentSettingsSnapshot()
+        await applySessionInitialSettingsToEngine(session)
+
+        let startEvent = session.events.first { event in
+            event.kind == .startPlayback
+        }
+        let startRampSeconds = session.seconds(forFrameCount: startEvent?.transitionFrameCount ?? 0)
+        guard await retryUntilAccepted({
+            audioEngine.startTone(rampSeconds: startRampSeconds)
+        }) else {
+            return false
+        }
+
+        let liveStartTimeline = audioEngine.timelineSnapshot()
+        isFilePlaybackActive = true
+        isPlaying = true
+        filePlaybackTask?.cancel()
+        filePlaybackTask = Task { [weak self] in
+            await self?.runFilePlayback(
+                session,
+                liveStartTimeline: liveStartTimeline,
+                restoreSnapshot: restoreSnapshot
+            )
+        }
+
+        return true
+    }
+
+    private func runFilePlayback(
+        _ session: WaveSessionExport,
+        liveStartTimeline: WaveAudioTimelineSnapshot,
+        restoreSnapshot: WaveGeneratorSettings
+    ) async {
+        let sortedEvents = session.events.sorted { lhs, rhs in
+            lhs.frameOffset < rhs.frameOffset
+        }
+
+        for event in sortedEvents where event.kind != .startPlayback {
+            await waitForSessionFrame(
+                event.frameOffset,
+                in: session,
+                liveStartTimeline: liveStartTimeline
+            )
+            guard !Task.isCancelled else { return }
+            await applySessionEventToEngine(event, in: session)
+        }
+
+        await waitForSessionFrame(
+            session.renderDurationFrames,
+            in: session,
+            liveStartTimeline: liveStartTimeline
+        )
+        guard !Task.isCancelled else { return }
+
+        if !sortedEvents.contains(where: { $0.kind == .stopPlayback }) {
+            _ = await retryUntilAccepted {
+                audioEngine.stopTone(rampSeconds: 0)
+            }
+        }
+
+        finishFilePlayback(restoreSettings: restoreSnapshot, stopTone: false)
+    }
+
+    private func waitForSessionFrame(
+        _ frameOffset: Int64,
+        in session: WaveSessionExport,
+        liveStartTimeline: WaveAudioTimelineSnapshot
+    ) async {
+        let liveOffset = session.liveFrameOffset(
+            for: frameOffset,
+            liveSampleRate: liveStartTimeline.sampleRate
+        )
+        let targetFrame = liveStartTimeline.framePosition + liveOffset
+
+        while !Task.isCancelled,
+              audioEngine.timelineSnapshot().framePosition < targetFrame {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    private func applySessionEventToEngine(_ event: WaveSessionExportEvent, in session: WaveSessionExport) async {
+        let durationSeconds = session.seconds(forFrameCount: event.transitionFrameCount ?? 0)
+
+        switch event.kind {
+        case .startPlayback:
+            break
+        case .stopPlayback:
+            _ = await retryUntilAccepted {
+                audioEngine.stopTone(rampSeconds: durationSeconds)
+            }
+        case .carrierChanged:
+            guard let carrierHz = event.carrierHz else { return }
+            _ = await retryUntilAccepted {
+                audioEngine.applyCarrierHz(
+                    carrierHz,
+                    channelIndex: sessionEngineChannelIndex(for: event.channel, isStereo: session.isStereo),
+                    durationSeconds: durationSeconds
+                )
+            }
+        case .pulseChanged:
+            guard let pulseIndex = event.pulseIndex else { return }
+            _ = await retryUntilAccepted {
+                audioEngine.applyPulse(
+                    at: pulseIndex,
+                    channelIndex: sessionEngineChannelIndex(for: event.channel, isStereo: session.isStereo),
+                    frequency: event.frequency ?? 0,
+                    wetness: event.wetness ?? 0,
+                    volume: event.volume ?? 0,
+                    durationSeconds: durationSeconds
+                )
+            }
+        case .pulseAdded:
+            _ = await retryUntilAccepted {
+                audioEngine.addPulse(
+                    channelIndex: sessionEngineChannelIndex(for: event.channel, isStereo: session.isStereo),
+                    frequency: event.frequency ?? 0,
+                    wetness: event.wetness ?? 0,
+                    targetVolume: event.volume ?? 0,
+                    durationSeconds: durationSeconds
+                )
+            }
+        case .pulseRemoved:
+            guard let pulseIndex = event.pulseIndex else { return }
+            _ = await retryUntilAccepted {
+                audioEngine.removePulse(
+                    at: pulseIndex,
+                    channelIndex: sessionEngineChannelIndex(for: event.channel, isStereo: session.isStereo),
+                    durationSeconds: durationSeconds
+                )
+            }
+        }
+    }
+
+    private func applySessionInitialSettingsToEngine(_ session: WaveSessionExport) async {
+        if session.isStereo {
+            await applyChannelSettingsToEngine(session.channelSettings(for: .left), channel: .left)
+            await applyChannelSettingsToEngine(session.channelSettings(for: .right), channel: .right)
+        } else {
+            await applyChannelSettingsToEngine(session.channelSettings(for: .left), channel: .left)
+        }
+
+        _ = await retryUntilAccepted {
+            audioEngine.setStereoEnabled(session.isStereo)
+        }
+    }
+
+    private func applySettingsSnapshotToEngine(_ snapshot: WaveGeneratorSettings) async {
+        let session = WaveSessionExport(
+            session: WaveSessionRecord(
+                id: UUID(),
+                startedAt: Date(),
+                sampleRate: audioEngine.timelineSnapshot().sampleRate,
+                durationFrames: 0,
+                initialSettings: snapshot,
+                events: []
+            )
+        )
+
+        await applySessionInitialSettingsToEngine(session)
+    }
+
+    private func applyChannelSettingsToEngine(_ settings: WaveChannelSettings, channel: WaveChannel) async {
+        _ = await retryUntilAccepted {
+            audioEngine.applyCarrierHz(
+                settings.carrierHz,
+                channelIndex: channel.engineChannelIndex,
+                durationSeconds: 0
+            )
+        }
+        _ = await retryUntilAccepted {
+            audioEngine.removeAllPulses(channelIndex: channel.engineChannelIndex)
+        }
+
+        for pulse in settings.pulses {
+            _ = await retryUntilAccepted {
+                audioEngine.addPulse(
+                    channelIndex: channel.engineChannelIndex,
+                    frequency: pulse.frequency,
+                    wetness: pulse.wetness,
+                    targetVolume: pulse.volume,
+                    durationSeconds: 0
+                )
+            }
+        }
+    }
+
+    private func finishFilePlayback(restoreSettings snapshot: WaveGeneratorSettings, stopTone: Bool) {
+        if stopTone {
+            _ = audioEngine.stopTone(rampSeconds: 0.25)
+        }
+
+        isPlaying = false
+        isFilePlaybackActive = false
+        filePlaybackTask = nil
+        Task {
+            await applySettingsSnapshotToEngine(snapshot)
+        }
+    }
+
+    private func finishFilePlayback(restoreSettings: Bool, stopTone: Bool) {
+        if stopTone {
+            _ = audioEngine.stopTone(rampSeconds: 0.25)
+        }
+
+        isPlaying = false
+        isFilePlaybackActive = false
+        filePlaybackTask = nil
+        if restoreSettings {
+            applyAllSettingsToEngine()
+        }
+    }
+
+    private func renderSessionWAV(_ session: WaveSessionExport) async -> Bool {
+        guard !isPlaying, !isRenderingSessionWAV else { return false }
+
+        isRenderingSessionWAV = true
+        sessionHistoryErrorMessage = nil
+        defer { isRenderingSessionWAV = false }
+
+        do {
+            lastRenderedWAVURL = try await Task.detached {
+                try WaveSessionOfflineRenderer.render(session)
+            }.value
+            return true
+        } catch {
+            sessionHistoryErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    private func sessionEngineChannelIndex(for channel: WaveChannel?, isStereo: Bool) -> Int {
+        isStereo ? (channel ?? .left).engineChannelIndex : WaveChannel.left.engineChannelIndex
     }
 
     private func channelSettings(for channel: WaveChannel) -> WaveChannelSettings {

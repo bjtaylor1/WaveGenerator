@@ -8,16 +8,58 @@ struct SessionHistorySheet: View {
     @State private var exportDocument: WaveSessionExportDocument?
     @State private var exportFilename = "WaveGenerator-Session.json"
     @State private var isExporterPresented = false
+    @State private var importMode: SessionFileImportMode?
+    @State private var isImporterPresented = false
 
     var body: some View {
         NavigationStack {
             List {
+                Section("Files") {
+                    Button {
+                        importMode = .playback
+                        isImporterPresented = true
+                    } label: {
+                        Label("Play Session File", systemImage: "play.circle")
+                    }
+                    .disabled(viewModel.sessionFileActionsLocked)
+
+                    Button {
+                        importMode = .renderWAV
+                        isImporterPresented = true
+                    } label: {
+                        Label("Render WAV From File", systemImage: "waveform")
+                    }
+                    .disabled(viewModel.sessionFileActionsLocked)
+
+                    if viewModel.isRenderingSessionWAV {
+                        ProgressView("Rendering WAV")
+                    }
+
+                    if let url = viewModel.lastRenderedWAVURL {
+                        ShareLink(item: url) {
+                            Label("Share Rendered WAV", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                }
+
                 if viewModel.sessionHistory.isEmpty {
                     ContentUnavailableView("No Sessions", systemImage: "clock.arrow.circlepath")
                 } else {
-                    ForEach(viewModel.sessionHistory) { session in
-                        SessionHistoryRow(session: session) { session in
-                            prepareExport(for: session)
+                    Section("History") {
+                        ForEach(viewModel.sessionHistory) { session in
+                            SessionHistoryRow(
+                                session: session,
+                                playSession: { session in
+                                    play(session)
+                                },
+                                renderWAV: { session in
+                                    renderWAV(session)
+                                },
+                                exportSession: { session in
+                                    prepareExport(for: session)
+                                },
+                                actionsDisabled: viewModel.sessionFileActionsLocked
+                            )
                         }
                     }
                 }
@@ -41,6 +83,13 @@ struct SessionHistorySheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
+        ) { result in
+            handleImport(result)
+        }
         .fileExporter(
             isPresented: $isExporterPresented,
             document: exportDocument,
@@ -59,5 +108,42 @@ struct SessionHistorySheet: View {
         exportDocument = document
         exportFilename = session.exportFilename
         isExporterPresented = true
+    }
+
+    private func play(_ session: WaveSessionRecord) {
+        Task {
+            let started = await viewModel.playHistorySession(session)
+            if started {
+                dismiss()
+            }
+        }
+    }
+
+    private func renderWAV(_ session: WaveSessionRecord) {
+        Task {
+            _ = await viewModel.renderHistorySessionWAV(session)
+        }
+    }
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case let .success(urls):
+            guard let url = urls.first, let importMode else { return }
+            switch importMode {
+            case .playback:
+                Task {
+                    let started = await viewModel.playSessionFile(at: url)
+                    if started {
+                        dismiss()
+                    }
+                }
+            case .renderWAV:
+                Task {
+                    _ = await viewModel.renderSessionFileWAV(at: url)
+                }
+            }
+        case let .failure(error):
+            viewModel.setSessionHistoryExportError(error)
+        }
     }
 }

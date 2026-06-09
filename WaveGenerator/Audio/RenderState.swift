@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-final class RenderState {
+nonisolated final class RenderState {
     let sampleRate: Double
     var isStereo = false
     var channels: [ChannelState]

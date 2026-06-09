@@ -1,6 +1,6 @@
 import Foundation
 
-struct WaveSessionEvent: Identifiable, Codable, Equatable {
+struct WaveSessionEvent: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let kind: WaveSessionEventKind
     let frameOffset: Int64

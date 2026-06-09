@@ -1,6 +1,6 @@
 import Foundation
 
-struct WaveChannelSettings: Equatable, Codable {
+struct WaveChannelSettings: Equatable, Codable, Sendable {
     var carrierHz: Double
     var pulses: [PulseSettings]
     var selectedPulseID: PulseSettings.ID?

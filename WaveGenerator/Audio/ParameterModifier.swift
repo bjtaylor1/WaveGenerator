@@ -1,6 +1,6 @@
 import Foundation
 
-struct ParameterModifier {
+nonisolated struct ParameterModifier {
     let startFrame: Int64
     let endFrame: Int64
     let startValue: Double
