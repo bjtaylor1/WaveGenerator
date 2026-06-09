@@ -22,6 +22,7 @@ final class WaveGeneratorViewModel: ObservableObject {
     @Published private(set) var isValidatingSessionFile = false
     @Published private(set) var pendingSessionFilename: String?
     @Published private(set) var loadedSessionFile: LoadedSessionFile?
+    @Published private(set) var filePlaybackRemainingText: String?
     @Published private(set) var lastRenderedWAVURL: URL?
     @Published var sessionHistoryErrorMessage: String?
 
@@ -547,6 +548,27 @@ final class WaveGeneratorViewModel: ObservableObject {
         stopPlaybackTask = nil
     }
 
+    private func updateFilePlaybackRemaining(
+        in session: WaveSessionExport,
+        liveStartTimeline: WaveAudioTimelineSnapshot
+    ) {
+        let liveTimeline = audioEngine.timelineSnapshot()
+        let totalLiveOffset = session.liveFrameOffset(
+            for: session.renderDurationFrames,
+            liveSampleRate: liveStartTimeline.sampleRate
+        )
+        let (targetFrame, overflow) = liveStartTimeline.framePosition.addingReportingOverflow(totalLiveOffset)
+        guard !overflow, liveStartTimeline.sampleRate > 0 else {
+            filePlaybackRemainingText = nil
+            return
+        }
+
+        let remainingLiveFrames = max(0, targetFrame - liveTimeline.framePosition)
+        filePlaybackRemainingText = WaveDurationFormatter.formatted(
+            seconds: Double(remainingLiveFrames) / liveStartTimeline.sampleRate
+        )
+    }
+
     private func sessionFileValidationMessage(filename: String, errors: [String]) -> String {
         (
             ["Session file \(filename) has errors:"]
@@ -576,6 +598,10 @@ final class WaveGeneratorViewModel: ObservableObject {
         let liveStartTimeline = audioEngine.timelineSnapshot()
         isFilePlaybackActive = true
         isPlaying = true
+        updateFilePlaybackRemaining(
+            in: session,
+            liveStartTimeline: liveStartTimeline
+        )
         filePlaybackTask?.cancel()
         filePlaybackTask = Task { [weak self] in
             await self?.runFilePlayback(
@@ -636,8 +662,17 @@ final class WaveGeneratorViewModel: ObservableObject {
 
         while !Task.isCancelled,
               audioEngine.timelineSnapshot().framePosition < targetFrame {
+            updateFilePlaybackRemaining(
+                in: session,
+                liveStartTimeline: liveStartTimeline
+            )
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+
+        updateFilePlaybackRemaining(
+            in: session,
+            liveStartTimeline: liveStartTimeline
+        )
     }
 
     private func applySessionEventToEngine(_ event: WaveSessionExportEvent, in session: WaveSessionExport) async {
@@ -753,6 +788,7 @@ final class WaveGeneratorViewModel: ObservableObject {
 
         isPlaying = false
         isFilePlaybackActive = false
+        filePlaybackRemainingText = nil
         filePlaybackTask = nil
         Task {
             await applySettingsSnapshotToEngine(snapshot)
@@ -766,6 +802,7 @@ final class WaveGeneratorViewModel: ObservableObject {
 
         isPlaying = false
         isFilePlaybackActive = false
+        filePlaybackRemainingText = nil
         filePlaybackTask = nil
         if restoreSettings {
             applyAllSettingsToEngine()

@@ -42,10 +42,14 @@ struct SessionHistorySheet: View {
                         }
                         .disabled(viewModel.sessionFileActionsLocked)
 
-                        Text(loadedSessionFile.filename)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(loadedSessionFile.filename)
+                                .lineLimit(1)
+
+                            Text("Total length: \(loadedSessionFile.formattedDuration)")
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     }
 
                     Button {

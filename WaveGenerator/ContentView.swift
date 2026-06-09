@@ -10,7 +10,18 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            VStack(spacing: 0) {
+                if let filePlaybackRemainingText = viewModel.filePlaybackRemainingText {
+                    Text("File playback: \(filePlaybackRemainingText) left")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+
+                    Divider()
+                }
+
                 if viewModel.isStereo {
                     TabView(selection: $viewModel.selectedChannel) {
                         ChannelSettingsView(
@@ -41,6 +52,7 @@ struct ContentView: View {
                     )
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Wave generator")
             .toolbar {
                 ToolbarItemGroup(placement: .topBarLeading) {
