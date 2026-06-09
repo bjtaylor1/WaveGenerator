@@ -2,8 +2,10 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = WaveGeneratorViewModel()
+    @AppStorage("startupSafetyWarning.isDismissed") private var isStartupSafetyWarningDismissed = false
     @State private var activeEditor: ParameterEditor?
     @State private var isSettingsPresented = false
+    @State private var isStartupSafetyWarningPresented = false
 
     var body: some View {
         NavigationStack {
@@ -38,7 +40,7 @@ struct ContentView: View {
                     )
                 }
             }
-            .navigationTitle("WaveGenerator POC")
+            .navigationTitle("Wave generator")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -59,9 +61,21 @@ struct ContentView: View {
         }
         .onAppear {
             viewModel.configureAudio()
+            if !isStartupSafetyWarningDismissed {
+                isStartupSafetyWarningPresented = true
+            }
         }
         .blur(radius: activeEditor == nil ? 0 : 3)
         .opacity(activeEditor == nil ? 1 : 0.65)
+        .sheet(isPresented: $isStartupSafetyWarningPresented) {
+            StartupSafetyWarningSheet { shouldDismissFutureWarnings in
+                if shouldDismissFutureWarnings {
+                    isStartupSafetyWarningDismissed = true
+                }
+                isStartupSafetyWarningPresented = false
+            }
+            .interactiveDismissDisabled()
+        }
         .sheet(isPresented: $isSettingsPresented) {
             SettingsSheet(viewModel: viewModel)
         }
