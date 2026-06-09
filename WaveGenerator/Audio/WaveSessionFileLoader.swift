@@ -1,7 +1,7 @@
 import Foundation
 
-struct WaveSessionFileLoader {
-    static func load(from url: URL) throws -> WaveSessionExport {
+nonisolated struct WaveSessionFileLoader {
+    nonisolated static func load(from url: URL) throws -> WaveSessionExport {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer {
             if didAccess {

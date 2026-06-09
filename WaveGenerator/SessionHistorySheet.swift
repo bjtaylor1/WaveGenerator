@@ -19,9 +19,34 @@ struct SessionHistorySheet: View {
                         importMode = .playback
                         isImporterPresented = true
                     } label: {
-                        Label("Play Session File", systemImage: "play.circle")
+                        Label("Load Session File", systemImage: "doc.badge.plus")
                     }
                     .disabled(viewModel.sessionFileActionsLocked)
+
+                    if viewModel.isValidatingSessionFile {
+                        ProgressView("Checking session file")
+
+                        if let pendingSessionFilename = viewModel.pendingSessionFilename {
+                            Text(pendingSessionFilename)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    if let loadedSessionFile = viewModel.loadedSessionFile {
+                        Button {
+                            playLoadedSessionFile()
+                        } label: {
+                            Label("File loaded - click here to play it", systemImage: "play.circle")
+                        }
+                        .disabled(viewModel.sessionFileActionsLocked)
+
+                        Text(loadedSessionFile.filename)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
 
                     Button {
                         importMode = .renderWAV
@@ -125,6 +150,15 @@ struct SessionHistorySheet: View {
         }
     }
 
+    private func playLoadedSessionFile() {
+        Task {
+            let started = await viewModel.playLoadedSessionFile()
+            if started {
+                dismiss()
+            }
+        }
+    }
+
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {
         case let .success(urls):
@@ -132,10 +166,7 @@ struct SessionHistorySheet: View {
             switch importMode {
             case .playback:
                 Task {
-                    let started = await viewModel.playSessionFile(at: url)
-                    if started {
-                        dismiss()
-                    }
+                    _ = await viewModel.loadSessionFile(at: url)
                 }
             case .renderWAV:
                 Task {

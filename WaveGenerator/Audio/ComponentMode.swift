@@ -1,4 +1,4 @@
-enum ComponentMode: Sendable {
+nonisolated enum ComponentMode: Sendable {
     case bipolarSine
     case unipolarPulse
 }

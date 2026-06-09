@@ -1,6 +1,6 @@
 import Foundation
 
-struct WaveSessionExport: Codable, Sendable {
+nonisolated struct WaveSessionExport: Codable, Sendable {
     let formatVersion: Int
     let appVersion: String?
     let appBuild: String?
@@ -27,7 +27,10 @@ struct WaveSessionExport: Codable, Sendable {
 
     nonisolated var renderDurationFrames: Int64 {
         let eventEndFrame = events.reduce(durationFrames) { partial, event in
-            max(partial, event.frameOffset + (event.transitionFrameCount ?? 0))
+            let frameOffset = max(0, event.frameOffset)
+            let transitionFrameCount = max(0, event.transitionFrameCount ?? 0)
+            let (endFrame, overflow) = frameOffset.addingReportingOverflow(transitionFrameCount)
+            return max(partial, overflow ? Int64.max : endFrame)
         }
 
         return max(durationFrames, eventEndFrame)

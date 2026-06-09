@@ -1,6 +1,6 @@
 import Foundation
 
-enum WaveSessionFileError: LocalizedError {
+enum WaveSessionFileError: LocalizedError, Sendable {
     case unreadableFile
     case invalidSampleRate
     case invalidFrameCount

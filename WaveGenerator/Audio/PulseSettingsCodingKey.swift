@@ -1,4 +1,4 @@
-enum PulseSettingsCodingKey: String, CodingKey {
+nonisolated enum PulseSettingsCodingKey: String, CodingKey {
     case id
     case frequency
     case wetness

@@ -1,4 +1,4 @@
-enum WaveChannel: String, CaseIterable, Identifiable, Codable, Sendable {
+nonisolated enum WaveChannel: String, CaseIterable, Identifiable, Codable, Sendable {
     case left
     case right
 

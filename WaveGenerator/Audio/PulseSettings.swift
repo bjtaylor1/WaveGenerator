@@ -1,6 +1,6 @@
 import Foundation
 
-struct PulseSettings: Identifiable, Equatable, Codable, Sendable {
+nonisolated struct PulseSettings: Identifiable, Equatable, Codable, Sendable {
     let id: UUID
     var frequency: Double
     var wetness: Double

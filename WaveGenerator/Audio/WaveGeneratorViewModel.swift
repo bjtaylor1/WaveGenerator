@@ -17,13 +17,18 @@ final class WaveGeneratorViewModel: ObservableObject {
     @Published private(set) var isApplyingSettings = false
     @Published private(set) var sessionHistory: [WaveSessionRecord] = []
     @Published private(set) var isFilePlaybackActive = false
+    @Published private(set) var isStoppingPlayback = false
     @Published private(set) var isRenderingSessionWAV = false
+    @Published private(set) var isValidatingSessionFile = false
+    @Published private(set) var pendingSessionFilename: String?
+    @Published private(set) var loadedSessionFile: LoadedSessionFile?
     @Published private(set) var lastRenderedWAVURL: URL?
     @Published var sessionHistoryErrorMessage: String?
 
     private let audioEngine = WaveAudioEngine()
     private var queueMonitorTask: Task<Void, Never>?
     private var filePlaybackTask: Task<Void, Never>?
+    private var stopPlaybackTask: Task<Void, Never>?
     private let settingsStore = WaveSettingsStore()
     private let sessionHistoryStore = WaveSessionHistoryStore()
     private let sessionRecorder = WaveSessionRecorder()
@@ -35,7 +40,7 @@ final class WaveGeneratorViewModel: ObservableObject {
     }
 
     var parameterControlsLocked: Bool {
-        isApplyingSettings || isQueueSaturated || isFilePlaybackActive
+        isApplyingSettings || isQueueSaturated || isFilePlaybackActive || isStoppingPlayback
     }
 
     var settingsSheetLocked: Bool {
@@ -43,10 +48,19 @@ final class WaveGeneratorViewModel: ObservableObject {
     }
 
     var sessionFileActionsLocked: Bool {
-        isPlaying || isApplyingSettings || isQueueSaturated || isRenderingSessionWAV
+        isPlaying
+            || isStoppingPlayback
+            || isApplyingSettings
+            || isQueueSaturated
+            || isRenderingSessionWAV
+            || isValidatingSessionFile
     }
 
     var playbackButtonTitle: String {
+        if isStoppingPlayback {
+            return "Stopping..."
+        }
+
         if isFilePlaybackActive {
             return "Stop File"
         }
@@ -55,7 +69,11 @@ final class WaveGeneratorViewModel: ObservableObject {
     }
 
     var playbackButtonDisabled: Bool {
-        !isPlaying && parameterControlsLocked
+        if isStoppingPlayback {
+            return true
+        }
+
+        return !isPlaying && parameterControlsLocked
     }
 
     func carrierHz(for channel: WaveChannel) -> Double {
@@ -125,22 +143,29 @@ final class WaveGeneratorViewModel: ObservableObject {
     }
 
     func stopPlayback() {
-        guard isPlaying else { return }
+        guard isPlaying, !isStoppingPlayback else { return }
 
         let timeline = audioEngine.timelineSnapshot()
         let transitionFrameCount = audioEngine.durationFrames(for: transitionSeconds)
-        isPlaying = false
-        _ = audioEngine.stopTone(rampSeconds: transitionSeconds)
+        guard audioEngine.stopTone(rampSeconds: transitionSeconds) else { return }
+        isStoppingPlayback = true
         if let session = sessionRecorder.finishSession(
             timeline: timeline,
             transitionFrameCount: transitionFrameCount
         ) {
             sessionHistory = sessionHistoryStore.add(session)
         }
+
+        stopPlaybackTask?.cancel()
+        stopPlaybackTask = Task { [weak self] in
+            await self?.finishStoppingPlayback(
+                atFrame: timeline.framePosition + transitionFrameCount
+            )
+        }
     }
 
     func startPlayback() {
-        guard !isPlaying, !isFilePlaybackActive, !isApplyingSettings, !isQueueSaturated else { return }
+        guard !isPlaying, !isFilePlaybackActive, !isStoppingPlayback, !isApplyingSettings, !isQueueSaturated else { return }
 
         let timeline = audioEngine.timelineSnapshot()
         let transitionFrameCount = audioEngine.durationFrames(for: transitionSeconds)
@@ -381,18 +406,59 @@ final class WaveGeneratorViewModel: ObservableObject {
         sessionHistoryErrorMessage = error.localizedDescription
     }
 
-    func playHistorySession(_ session: WaveSessionRecord) async -> Bool {
-        await playSession(WaveSessionExport(session: session))
-    }
+    func loadSessionFile(at url: URL) async -> Bool {
+        guard !sessionFileActionsLocked else { return false }
 
-    func playSessionFile(at url: URL) async -> Bool {
+        let filename = url.lastPathComponent
+        sessionHistoryErrorMessage = nil
+        loadedSessionFile = nil
+        pendingSessionFilename = filename
+        isValidatingSessionFile = true
+        defer {
+            isValidatingSessionFile = false
+            pendingSessionFilename = nil
+        }
+
         do {
-            let session = try WaveSessionFileLoader.load(from: url)
-            return await playSession(session)
+            let session = try await Task.detached {
+                try WaveSessionFileLoader.load(from: url)
+            }.value
+            let validationErrors = await Task.detached {
+                WaveSessionFileValidator.validationErrors(for: session)
+            }.value
+
+            guard validationErrors.isEmpty else {
+                sessionHistoryErrorMessage = sessionFileValidationMessage(
+                    filename: filename,
+                    errors: validationErrors
+                )
+                return false
+            }
+
+            loadedSessionFile = LoadedSessionFile(
+                filename: filename,
+                session: session
+            )
+            return true
         } catch {
             sessionHistoryErrorMessage = error.localizedDescription
             return false
         }
+    }
+
+    func playHistorySession(_ session: WaveSessionRecord) async -> Bool {
+        await playSession(WaveSessionExport(session: session))
+    }
+
+    func playLoadedSessionFile() async -> Bool {
+        guard let loadedSessionFile else { return false }
+
+        let started = await playSession(loadedSessionFile.session)
+        if started {
+            self.loadedSessionFile = nil
+        }
+
+        return started
     }
 
     func renderHistorySessionWAV(_ session: WaveSessionRecord) async -> Bool {
@@ -402,6 +468,15 @@ final class WaveGeneratorViewModel: ObservableObject {
     func renderSessionFileWAV(at url: URL) async -> Bool {
         do {
             let session = try WaveSessionFileLoader.load(from: url)
+            let validationErrors = WaveSessionFileValidator.validationErrors(for: session)
+            guard validationErrors.isEmpty else {
+                sessionHistoryErrorMessage = sessionFileValidationMessage(
+                    filename: url.lastPathComponent,
+                    errors: validationErrors
+                )
+                return false
+            }
+
             return await renderSessionWAV(session)
         } catch {
             sessionHistoryErrorMessage = error.localizedDescription
@@ -420,6 +495,7 @@ final class WaveGeneratorViewModel: ObservableObject {
     deinit {
         queueMonitorTask?.cancel()
         filePlaybackTask?.cancel()
+        stopPlaybackTask?.cancel()
     }
 
     private func startQueueMonitor() {
@@ -458,8 +534,28 @@ final class WaveGeneratorViewModel: ObservableObject {
         return nil
     }
 
+    private func finishStoppingPlayback(atFrame targetFrame: Int64) async {
+        while !Task.isCancelled,
+              audioEngine.timelineSnapshot().framePosition < targetFrame {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        guard !Task.isCancelled else { return }
+
+        isPlaying = false
+        isStoppingPlayback = false
+        stopPlaybackTask = nil
+    }
+
+    private func sessionFileValidationMessage(filename: String, errors: [String]) -> String {
+        (
+            ["Session file \(filename) has errors:"]
+                + errors.map { "- \($0)" }
+        ).joined(separator: "\n")
+    }
+
     private func playSession(_ session: WaveSessionExport) async -> Bool {
-        guard !isPlaying, !isRenderingSessionWAV, !isApplyingSettings, !isQueueSaturated else {
+        guard !isPlaying, !isStoppingPlayback, !isRenderingSessionWAV, !isApplyingSettings, !isQueueSaturated else {
             return false
         }
 

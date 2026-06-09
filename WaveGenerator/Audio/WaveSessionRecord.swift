@@ -1,6 +1,6 @@
 import Foundation
 
-struct WaveSessionRecord: Identifiable, Codable, Sendable {
+nonisolated struct WaveSessionRecord: Identifiable, Codable, Sendable {
     let id: UUID
     let startedAt: Date
     let sampleRate: Double

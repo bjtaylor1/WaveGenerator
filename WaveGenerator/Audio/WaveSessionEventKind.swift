@@ -1,4 +1,4 @@
-enum WaveSessionEventKind: String, Codable, Sendable {
+nonisolated enum WaveSessionEventKind: String, Codable, Sendable {
     case startPlayback
     case stopPlayback
     case carrierChanged

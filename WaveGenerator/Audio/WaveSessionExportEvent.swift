@@ -1,6 +1,6 @@
 import Foundation
 
-struct WaveSessionExportEvent: Codable, Sendable {
+nonisolated struct WaveSessionExportEvent: Codable, Sendable {
     let kind: WaveSessionEventKind
     let frameOffset: Int64
     let channel: WaveChannel?

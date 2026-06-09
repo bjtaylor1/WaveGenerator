@@ -1,6 +1,6 @@
 import Foundation
 
-struct WaveGeneratorSettings: Codable, Sendable {
+nonisolated struct WaveGeneratorSettings: Codable, Sendable {
     var carrierHz: Double
     var transitionSeconds: Double
     var pulses: [PulseSettings]
