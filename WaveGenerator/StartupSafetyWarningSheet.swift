@@ -32,17 +32,19 @@ struct StartupSafetyWarningSheet: View {
                     .controlSize(.large)
                 }
             }
-            .navigationTitle("Audio safety")
+            .navigationTitle("Audio recommendations to remember:")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
         .presentationDragIndicator(.hidden)
     }
 
     private static let warningMessage = """
-    1. Remember to put your phone in silent and/or do-not-disturb and/or airplane mode in order to prevent audible notifications causing a sudden spike to the output.
+    1. Use silent/do-not-disturb/silent mode to prevent notifications affecting output.
 
-    2. Changing the phone's volume, either down or up, can cause a jolt to the audio output. It is recommended to turn the volume right down on the output device/amplifier while adjusting the phone's volume. The best setting is either maximum, or one or two clicks down from the maximum.
+    2. Changing the phone's volume (down or up) while audio is playing can cause jolts.
+
+    3. Become familiar with the characteristics of the app either by recording or listening etc before using it on output device/amplifier.
     """
 }
 
