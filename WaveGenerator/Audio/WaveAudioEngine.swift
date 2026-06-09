@@ -8,10 +8,7 @@ final class WaveAudioEngine {
     private let commandQueue = WaveCommandQueue()
 
     private var sourceNode: AVAudioSourceNode?
-    private var recordingBuffer: WaveRecordingBuffer?
     private var isConfigured = false
-    private var isRecordingEnabled = false
-    private var isStereoOutputEnabled = false
     private var renderState: RenderState?
 
     func startEngineIfNeeded() throws {
@@ -78,12 +75,6 @@ final class WaveAudioEngine {
                     : uiLeftSample
                 let outputLeftSample = state.isStereo ? uiRightSample : uiLeftSample
                 let outputRightSample = state.isStereo ? uiLeftSample : uiRightSample
-
-                if state.isStereo {
-                    self.recordingBuffer?.append(left: outputLeftSample, right: outputRightSample)
-                } else {
-                    self.recordingBuffer?.append(outputLeftSample)
-                }
 
                 for (channelIndex, buffer) in bufferList.enumerated() {
                     guard let mData = buffer.mData else { continue }
@@ -260,11 +251,6 @@ final class WaveAudioEngine {
 
     @discardableResult
     func setStereoEnabled(_ isEnabled: Bool) -> Bool {
-        isStereoOutputEnabled = isEnabled
-        if isRecordingEnabled {
-            setRecordingEnabled(true)
-        }
-
         return commandQueue.enqueue(
             WaveCommand(
                 kind: WaveCommandKind.setStereoEnabled.rawValue,
@@ -281,80 +267,6 @@ final class WaveAudioEngine {
 
     func isCommandQueueFull() -> Bool {
         commandQueue.isFull()
-    }
-
-    func setRecordingEnabled(_ isEnabled: Bool) {
-        isRecordingEnabled = isEnabled
-        guard isEnabled else {
-            recordingBuffer = nil
-            return
-        }
-
-        let sampleRate = renderState?.sampleRate ?? AVAudioSession.sharedInstance().sampleRate
-        recordingBuffer = WaveRecordingBuffer(
-            sampleRate: sampleRate > 0 ? sampleRate : 48_000,
-            channelCount: isStereoOutputEnabled ? 2 : 1,
-            durationSeconds: 60
-        )
-    }
-
-    func saveLastMinuteWAV() throws -> URL {
-        guard let recordingBuffer else {
-            throw NSError(
-                domain: "WaveAudioEngine",
-                code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "Audio engine is not configured."]
-            )
-        }
-
-        let snapshot = recordingBuffer.snapshot()
-        guard snapshot.frameCount > 0 else {
-            throw NSError(
-                domain: "WaveAudioEngine",
-                code: -3,
-                userInfo: [NSLocalizedDescriptionKey: "No generated audio has been recorded yet."]
-            )
-        }
-
-        let directory = FileManager.default.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
-        let filename = "WaveGenerator-\(Self.recordingTimestamp())-\(UUID().uuidString.prefix(8)).wav"
-        let url = directory.appendingPathComponent(filename)
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: snapshot.sampleRate,
-            channels: AVAudioChannelCount(snapshot.channelCount),
-            interleaved: false
-        )!
-        let file = try AVAudioFile(
-            forWriting: url,
-            settings: format.settings
-        )
-        guard let pcmBuffer = AVAudioPCMBuffer(
-            pcmFormat: format,
-            frameCapacity: AVAudioFrameCount(snapshot.frameCount)
-        ) else {
-            throw NSError(
-                domain: "WaveAudioEngine",
-                code: -4,
-                userInfo: [NSLocalizedDescriptionKey: "Could not create WAV buffer."]
-            )
-        }
-
-        pcmBuffer.frameLength = AVAudioFrameCount(snapshot.frameCount)
-        if let channelData = pcmBuffer.floatChannelData {
-            for frame in 0..<snapshot.frameCount {
-                let sourceOffset = frame * snapshot.channelCount
-                for channel in 0..<snapshot.channelCount {
-                    channelData[channel][frame] = snapshot.samples[sourceOffset + channel]
-                }
-            }
-        }
-
-        try file.write(from: pcmBuffer)
-        return url
     }
 
     private func enqueueFrequency(
@@ -570,9 +482,4 @@ final class WaveAudioEngine {
         Int64(max(0, (seconds * sampleRate).rounded()))
     }
 
-    private static func recordingTimestamp() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return formatter.string(from: Date())
-    }
 }

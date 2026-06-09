@@ -12,34 +12,22 @@ final class WaveGeneratorViewModel: ObservableObject {
     @Published private var leftSettings = WaveChannelSettings()
     @Published private var rightSettings = WaveChannelSettings()
     @Published var transitionSeconds: Double = 15
-    @Published var saveWAVOnStop = false {
-        didSet {
-            guard !isPlaying else {
-                saveWAVOnStop = oldValue
-                return
-            }
-
-            audioEngine.setRecordingEnabled(saveWAVOnStop)
-            if saveWAVOnStop {
-                lastSavedRecordingURL = nil
-                recordingErrorMessage = nil
-            }
-        }
-    }
 
     @Published private(set) var isQueueSaturated = false
     @Published private(set) var isApplyingSettings = false
-    @Published private(set) var isSavingRecording = false
-    @Published private(set) var lastSavedRecordingURL: URL?
-    @Published private(set) var recordingErrorMessage: String?
+    @Published private(set) var sessionHistory: [WaveSessionRecord] = []
+    @Published var sessionHistoryErrorMessage: String?
 
     private let audioEngine = WaveAudioEngine()
     private var queueMonitorTask: Task<Void, Never>?
     private let settingsStore = WaveSettingsStore()
+    private let sessionHistoryStore = WaveSessionHistoryStore()
+    private let sessionRecorder = WaveSessionRecorder()
     private var hasConfiguredAudioState = false
 
     init() {
         restoreSettings()
+        sessionHistory = sessionHistoryStore.load()
     }
 
     var parameterControlsLocked: Bool {
@@ -121,25 +109,21 @@ final class WaveGeneratorViewModel: ObservableObject {
 
         isPlaying = false
         _ = audioEngine.stopTone(rampSeconds: transitionSeconds)
-
-        if saveWAVOnStop {
-            Task { [transitionSeconds] in
-                let delay = UInt64(max(0, transitionSeconds) * 1_000_000_000)
-                if delay > 0 {
-                    try? await Task.sleep(nanoseconds: delay)
-                }
-
-                await saveLastMinuteRecording()
-                saveWAVOnStop = false
-            }
+        if let session = sessionRecorder.finishSession(transitionSeconds: transitionSeconds) {
+            sessionHistory = sessionHistoryStore.add(session)
         }
     }
 
     func startPlayback() {
         guard !isPlaying, !isApplyingSettings, !isQueueSaturated else { return }
 
+        guard audioEngine.startTone(rampSeconds: transitionSeconds) else { return }
+
+        sessionRecorder.beginSession(
+            initialSettings: currentSettingsSnapshot(),
+            transitionSeconds: transitionSeconds
+        )
         isPlaying = true
-        _ = audioEngine.startTone(rampSeconds: transitionSeconds)
     }
 
     func togglePlayback() {
@@ -168,6 +152,12 @@ final class WaveGeneratorViewModel: ObservableObject {
             updateSettings(for: channel) { settings in
                 settings.carrierHz = carrier
             }
+            recordSessionEvent(
+                kind: .carrierChanged,
+                channel: channel,
+                carrierHz: carrier,
+                transitionSeconds: durationSeconds
+            )
         }
 
         return accepted
@@ -223,23 +213,19 @@ final class WaveGeneratorViewModel: ObservableObject {
                     ? id
                     : normalizedPulses.first?.id
             }
+            recordSessionEvent(
+                kind: .pulseChanged,
+                channel: channel,
+                pulseID: id,
+                pulseIndex: index,
+                frequency: normalizedPulse.frequency,
+                wetness: normalizedPulse.wetness,
+                volume: normalizedPulse.volume,
+                transitionSeconds: durationSeconds
+            )
         }
 
         return accepted
-    }
-
-    func saveLastMinuteRecording() async {
-        guard !isSavingRecording else { return }
-
-        isSavingRecording = true
-        recordingErrorMessage = nil
-        defer { isSavingRecording = false }
-
-        do {
-            lastSavedRecordingURL = try audioEngine.saveLastMinuteWAV()
-        } catch {
-            recordingErrorMessage = error.localizedDescription
-        }
     }
 
     func addPulse(to channel: WaveChannel) async -> Bool {
@@ -269,6 +255,16 @@ final class WaveGeneratorViewModel: ObservableObject {
                 settings.pulses = Self.normalizedPulses(settings.pulses + [newPulse])
                 settings.selectedPulseID = newPulse.id
             }
+            recordSessionEvent(
+                kind: .pulseAdded,
+                channel: channel,
+                pulseID: newPulse.id,
+                pulseIndex: settings.pulses.count,
+                frequency: newPulse.frequency,
+                wetness: newPulse.wetness,
+                volume: newPulse.volume,
+                transitionSeconds: 0
+            )
         }
 
         return accepted
@@ -294,6 +290,14 @@ final class WaveGeneratorViewModel: ObservableObject {
         }
 
         guard accepted else { return false }
+
+        recordSessionEvent(
+            kind: .pulseRemoved,
+            channel: channel,
+            pulseID: pulse.id,
+            pulseIndex: index,
+            transitionSeconds: durationSeconds
+        )
 
         if durationSeconds > 0 {
             updateSettings(for: channel) { settings in
@@ -329,6 +333,20 @@ final class WaveGeneratorViewModel: ObservableObject {
         transitionSeconds = min(30, max(5, seconds))
         persistSettings()
         return true
+    }
+
+    func makeSessionExportDocument(for session: WaveSessionRecord) -> WaveSessionExportDocument? {
+        do {
+            sessionHistoryErrorMessage = nil
+            return try WaveSessionExportDocument(session: session)
+        } catch {
+            sessionHistoryErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func setSessionHistoryExportError(_ error: Error) {
+        sessionHistoryErrorMessage = error.localizedDescription
     }
 
     deinit {
@@ -468,18 +486,44 @@ final class WaveGeneratorViewModel: ObservableObject {
     }
 
     private func persistSettings() {
+        settingsStore.save(currentSettingsSnapshot())
+    }
+
+    private func currentSettingsSnapshot() -> WaveGeneratorSettings {
         let normalizedMono = Self.normalizedSettings(monoSettings)
-        settingsStore.save(
-            WaveGeneratorSettings(
-                carrierHz: normalizedMono.carrierHz,
-                transitionSeconds: transitionSeconds,
-                pulses: normalizedMono.pulses,
-                selectedPulseID: normalizedMono.selectedPulseID,
-                stereo: isStereo,
-                selectedChannel: selectedChannel,
-                leftChannel: Self.normalizedSettings(leftSettings),
-                rightChannel: Self.normalizedSettings(rightSettings)
-            )
+        return WaveGeneratorSettings(
+            carrierHz: normalizedMono.carrierHz,
+            transitionSeconds: transitionSeconds,
+            pulses: normalizedMono.pulses,
+            selectedPulseID: normalizedMono.selectedPulseID,
+            stereo: isStereo,
+            selectedChannel: selectedChannel,
+            leftChannel: Self.normalizedSettings(leftSettings),
+            rightChannel: Self.normalizedSettings(rightSettings)
+        )
+    }
+
+    private func recordSessionEvent(
+        kind: WaveSessionEventKind,
+        channel: WaveChannel? = nil,
+        pulseID: PulseSettings.ID? = nil,
+        pulseIndex: Int? = nil,
+        carrierHz: Double? = nil,
+        frequency: Double? = nil,
+        wetness: Double? = nil,
+        volume: Double? = nil,
+        transitionSeconds: Double? = nil
+    ) {
+        sessionRecorder.record(
+            kind: kind,
+            channel: channel,
+            pulseID: pulseID,
+            pulseIndex: pulseIndex,
+            carrierHz: carrierHz,
+            frequency: frequency,
+            wetness: wetness,
+            volume: volume,
+            transitionSeconds: transitionSeconds
         )
     }
 

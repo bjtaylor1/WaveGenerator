@@ -5,6 +5,7 @@ struct ContentView: View {
     @AppStorage("startupSafetyWarning.isDismissed") private var isStartupSafetyWarningDismissed = false
     @State private var activeEditor: ParameterEditor?
     @State private var isSettingsPresented = false
+    @State private var isHistoryPresented = false
     @State private var isStartupSafetyWarningPresented = false
 
     var body: some View {
@@ -42,12 +43,19 @@ struct ContentView: View {
             }
             .navigationTitle("Wave generator")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
                     Button {
                         isSettingsPresented = true
                     } label: {
                         Label("Settings", systemImage: "gearshape")
                     }
+
+                    Button {
+                        isHistoryPresented = true
+                    } label: {
+                        Label("History", systemImage: "clock.arrow.circlepath")
+                    }
+                    .disabled(viewModel.isPlaying)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -78,6 +86,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isSettingsPresented) {
             SettingsSheet(viewModel: viewModel)
+        }
+        .sheet(isPresented: $isHistoryPresented) {
+            SessionHistorySheet(viewModel: viewModel)
         }
         .sheet(item: $activeEditor) { editor in
             editorSheet(for: editor)

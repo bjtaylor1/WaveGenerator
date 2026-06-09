@@ -7,13 +7,13 @@ Capture architecture and UX decisions made during implementation so future sessi
 - Parameter automation must use audio sample-frame time, not wall-clock timers.
 - No abrupt transitions: frequency and gain changes ramp while playing; stopped-wave parameter changes apply immediately.
 - Carrier frequency is always present and clamped to `>= 200 Hz`.
-- Final rendered samples are hard-clamped to `-1...1` before output and recording.
+- Final rendered samples are hard-clamped to `-1...1` before output.
 - Oscillator phase continuity is preserved during parameter changes.
 - UI-to-engine command path uses a lock-free queue (avoid locks in render callback).
-- WAV capture is opt-in: arming "Save WAV on Stop" while stopped allocates a rolling one-minute mono buffer, and stopping saves then disarms it.
+- Completed playback sessions are persisted as compact action timelines: the app stores the starting settings snapshot plus accepted audio-changing actions with elapsed times.
 - Parameter updates are applied as staged edits with explicit `Apply` in UI to avoid partial state drift.
 - Batched parameter apply command is available for coherent multi-parameter transitions.
-- Waveform settings are persisted in `UserDefaults`, including carrier, transition, pulse layers, and selected pulse; the armed WAV capture switch is intentionally transient.
+- Waveform settings are persisted in `UserDefaults`, including carrier, transition, pulse layers, and selected pulse; the most recent 50 session timelines are also retained for export.
 
 ## iPhone Audio Startup Reliability
 Observed issue:

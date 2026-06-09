@@ -76,10 +76,10 @@ Refinements:
 - Smooth carrier/pulse/wetness changes through timeline modifiers.
 - Carrier minimum clamp at 200 Hz.
 - Dynamic pulse add/remove with ramped pulse contribution.
-- Save last minute of generated audio as a WAV file when the stopped-only recording switch is armed.
+- Save completed playback sessions as compact action timelines that can be exported from history.
 - Each pulse keeps a direct frequency editor with a `0...5 Hz` range.
 
 ## Deferred from POC
-- Modifier persistence/replay files.
+- Session replay UI.
 - Real-time safe lock-free control queue.
 - Disable controls while active transition (optional UX policy).

@@ -34,23 +34,6 @@ struct SettingsSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-
-                Section("Recording") {
-                    Toggle("Save WAV on Stop", isOn: $viewModel.saveWAVOnStop)
-                        .disabled(viewModel.settingsSheetLocked || viewModel.isSavingRecording)
-
-                    if let url = viewModel.lastSavedRecordingURL {
-                        ShareLink(item: url) {
-                            Label("Share WAV", systemImage: "square.and.arrow.up")
-                        }
-                    }
-
-                    if let recordingErrorMessage = viewModel.recordingErrorMessage {
-                        Text(recordingErrorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
