@@ -488,6 +488,7 @@ final class WaveGeneratorViewModel: ObservableObject {
     func stopFilePlayback() {
         guard isFilePlaybackActive else { return }
 
+        filePlaybackRemainingText = nil
         filePlaybackTask?.cancel()
         filePlaybackTask = nil
         finishFilePlayback(restoreSettings: true, stopTone: true)
@@ -668,6 +669,8 @@ final class WaveGeneratorViewModel: ObservableObject {
             )
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+
+        guard !Task.isCancelled else { return }
 
         updateFilePlaybackRemaining(
             in: session,

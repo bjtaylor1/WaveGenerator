@@ -15,6 +15,13 @@ struct ChannelSettingsView: View {
 
     var body: some View {
         Form {
+            if let filePlaybackRemainingText = viewModel.filePlaybackRemainingText {
+                Text(filePlaybackRemainingText)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.gray)
+                    .frame(maxWidth: .infinity)
+            }
+
             Section(viewModel.isStereo ? "\(channel.title) Carrier" : "Carrier") {
                 HStack {
                     Text("Carrier")
