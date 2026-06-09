@@ -1,7 +1,7 @@
 import Foundation
 
 final class WaveSessionHistoryStore {
-    private let key = "WaveGenerator.sessionHistory.v1"
+    private let key = "WaveGenerator.sessionHistory.v2"
     private let maxSessions: Int
     private let defaults: UserDefaults
     private let encoder = JSONEncoder()
@@ -36,9 +36,8 @@ final class WaveSessionHistoryStore {
 
     static func exportData(for session: WaveSessionRecord) throws -> Data {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(session)
+        return try encoder.encode(WaveSessionExport(session: session))
     }
 
     private func limited(_ sessions: [WaveSessionRecord]) -> [WaveSessionRecord] {

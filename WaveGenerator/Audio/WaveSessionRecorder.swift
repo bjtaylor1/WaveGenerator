@@ -2,22 +2,26 @@ import Foundation
 
 final class WaveSessionRecorder {
     private var startedAt: Date?
+    private var startFramePosition: Int64?
+    private var sampleRate: Double?
     private var initialSettings: WaveGeneratorSettings?
     private var events: [WaveSessionEvent] = []
 
     func beginSession(
         initialSettings: WaveGeneratorSettings,
-        transitionSeconds: Double,
-        at date: Date = Date()
+        timeline: WaveAudioTimelineSnapshot,
+        transitionFrameCount: Int64,
+        startedAt date: Date = Date()
     ) {
         startedAt = date
+        startFramePosition = timeline.framePosition
+        sampleRate = timeline.sampleRate
         self.initialSettings = initialSettings
         events = [
             WaveSessionEvent(
                 kind: .startPlayback,
-                elapsedSeconds: 0,
-                occurredAt: date,
-                transitionSeconds: transitionSeconds
+                frameOffset: 0,
+                transitionFrameCount: transitionFrameCount
             )
         ]
     }
@@ -31,16 +35,15 @@ final class WaveSessionRecorder {
         frequency: Double? = nil,
         wetness: Double? = nil,
         volume: Double? = nil,
-        transitionSeconds: Double? = nil,
-        at date: Date = Date()
+        transitionFrameCount: Int64? = nil,
+        timeline: WaveAudioTimelineSnapshot
     ) {
-        guard let startedAt else { return }
+        guard let startFramePosition else { return }
 
         events.append(
             WaveSessionEvent(
                 kind: kind,
-                elapsedSeconds: max(0, date.timeIntervalSince(startedAt)),
-                occurredAt: date,
+                frameOffset: max(0, timeline.framePosition - startFramePosition),
                 channel: channel,
                 pulseID: pulseID,
                 pulseIndex: pulseIndex,
@@ -48,25 +51,28 @@ final class WaveSessionRecorder {
                 frequency: frequency,
                 wetness: wetness,
                 volume: volume,
-                transitionSeconds: transitionSeconds
+                transitionFrameCount: transitionFrameCount
             )
         )
     }
 
-    func finishSession(transitionSeconds: Double, at date: Date = Date()) -> WaveSessionRecord? {
-        guard let startedAt, let initialSettings else { return nil }
+    func finishSession(
+        timeline: WaveAudioTimelineSnapshot,
+        transitionFrameCount: Int64
+    ) -> WaveSessionRecord? {
+        guard let startedAt, let startFramePosition, let sampleRate, let initialSettings else { return nil }
 
         record(
             kind: .stopPlayback,
-            transitionSeconds: transitionSeconds,
-            at: date
+            transitionFrameCount: transitionFrameCount,
+            timeline: timeline
         )
 
         let record = WaveSessionRecord(
             id: UUID(),
             startedAt: startedAt,
-            endedAt: date,
-            durationSeconds: max(0, date.timeIntervalSince(startedAt)),
+            sampleRate: sampleRate,
+            durationFrames: max(0, timeline.framePosition - startFramePosition),
             initialSettings: initialSettings,
             events: events
         )
@@ -76,6 +82,8 @@ final class WaveSessionRecorder {
 
     private func clear() {
         startedAt = nil
+        startFramePosition = nil
+        sampleRate = nil
         initialSettings = nil
         events = []
     }

@@ -3,13 +3,18 @@ import Foundation
 struct WaveSessionRecord: Identifiable, Codable {
     let id: UUID
     let startedAt: Date
-    let endedAt: Date
-    let durationSeconds: Double
+    let sampleRate: Double
+    let durationFrames: Int64
     let initialSettings: WaveGeneratorSettings
     let events: [WaveSessionEvent]
 
     var actionCount: Int {
         events.count
+    }
+
+    var durationSeconds: Double {
+        guard sampleRate > 0 else { return 0 }
+        return Double(durationFrames) / sampleRate
     }
 
     var formattedDuration: String {

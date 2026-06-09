@@ -10,7 +10,8 @@ Capture architecture and UX decisions made during implementation so future sessi
 - Final rendered samples are hard-clamped to `-1...1` before output.
 - Oscillator phase continuity is preserved during parameter changes.
 - UI-to-engine command path uses a lock-free queue (avoid locks in render callback).
-- Completed playback sessions are persisted as compact action timelines: the app stores the starting settings snapshot plus accepted audio-changing actions with elapsed times.
+- Completed playback sessions are persisted as compact action timelines: the app stores the starting settings snapshot plus accepted audio-changing actions at frame offsets from playback start.
+- Exported session files do not include absolute date/time fields; replay timing comes from `sampleRate`, `durationFrames`, event `frameOffset`, and transition frame counts.
 - Parameter updates are applied as staged edits with explicit `Apply` in UI to avoid partial state drift.
 - Batched parameter apply command is available for coherent multi-parameter transitions.
 - Waveform settings are persisted in `UserDefaults`, including carrier, transition, pulse layers, and selected pulse; the most recent 50 session timelines are also retained for export.

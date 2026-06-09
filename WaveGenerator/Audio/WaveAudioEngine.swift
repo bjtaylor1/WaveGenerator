@@ -55,9 +55,10 @@ final class WaveAudioEngine {
 
             let bufferList = UnsafeMutableAudioBufferListPointer(audioBufferList)
             let frames = Int(frameCount)
+            let startFrame = state.framePosition
 
             for frameOffset in 0..<frames {
-                let currentFrame = state.framePosition + Int64(frameOffset)
+                let currentFrame = startFrame + Int64(frameOffset)
                 let gain = min(1, max(0, state.masterGain.value(at: currentFrame)))
                 let uiLeftSample = self.renderSample(
                     from: state.channels[0],
@@ -83,7 +84,7 @@ final class WaveAudioEngine {
                 }
             }
 
-            state.framePosition += Int64(frames)
+            state.framePosition = startFrame + Int64(frames)
             self.removeExpiredComponents(from: state)
             return noErr
         }
@@ -267,6 +268,21 @@ final class WaveAudioEngine {
 
     func isCommandQueueFull() -> Bool {
         commandQueue.isFull()
+    }
+
+    func timelineSnapshot() -> WaveAudioTimelineSnapshot {
+        guard let renderState else {
+            return WaveAudioTimelineSnapshot(framePosition: 0, sampleRate: 48_000)
+        }
+
+        return WaveAudioTimelineSnapshot(
+            framePosition: renderState.framePosition,
+            sampleRate: renderState.sampleRate
+        )
+    }
+
+    func durationFrames(for seconds: Double) -> Int64 {
+        durationToFrames(seconds, sampleRate: timelineSnapshot().sampleRate)
     }
 
     private func enqueueFrequency(

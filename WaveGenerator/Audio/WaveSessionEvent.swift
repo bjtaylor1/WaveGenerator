@@ -3,8 +3,7 @@ import Foundation
 struct WaveSessionEvent: Identifiable, Codable, Equatable {
     let id: UUID
     let kind: WaveSessionEventKind
-    let elapsedSeconds: Double
-    let occurredAt: Date
+    let frameOffset: Int64
     let channel: WaveChannel?
     let pulseID: UUID?
     let pulseIndex: Int?
@@ -12,13 +11,12 @@ struct WaveSessionEvent: Identifiable, Codable, Equatable {
     let frequency: Double?
     let wetness: Double?
     let volume: Double?
-    let transitionSeconds: Double?
+    let transitionFrameCount: Int64?
 
     init(
         id: UUID = UUID(),
         kind: WaveSessionEventKind,
-        elapsedSeconds: Double,
-        occurredAt: Date,
+        frameOffset: Int64,
         channel: WaveChannel? = nil,
         pulseID: UUID? = nil,
         pulseIndex: Int? = nil,
@@ -26,12 +24,11 @@ struct WaveSessionEvent: Identifiable, Codable, Equatable {
         frequency: Double? = nil,
         wetness: Double? = nil,
         volume: Double? = nil,
-        transitionSeconds: Double? = nil
+        transitionFrameCount: Int64? = nil
     ) {
         self.id = id
         self.kind = kind
-        self.elapsedSeconds = elapsedSeconds
-        self.occurredAt = occurredAt
+        self.frameOffset = frameOffset
         self.channel = channel
         self.pulseID = pulseID
         self.pulseIndex = pulseIndex
@@ -39,6 +36,6 @@ struct WaveSessionEvent: Identifiable, Codable, Equatable {
         self.frequency = frequency
         self.wetness = wetness
         self.volume = volume
-        self.transitionSeconds = transitionSeconds
+        self.transitionFrameCount = transitionFrameCount
     }
 }

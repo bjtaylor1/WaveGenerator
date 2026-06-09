@@ -107,9 +107,14 @@ final class WaveGeneratorViewModel: ObservableObject {
     func stopPlayback() {
         guard isPlaying else { return }
 
+        let timeline = audioEngine.timelineSnapshot()
+        let transitionFrameCount = audioEngine.durationFrames(for: transitionSeconds)
         isPlaying = false
         _ = audioEngine.stopTone(rampSeconds: transitionSeconds)
-        if let session = sessionRecorder.finishSession(transitionSeconds: transitionSeconds) {
+        if let session = sessionRecorder.finishSession(
+            timeline: timeline,
+            transitionFrameCount: transitionFrameCount
+        ) {
             sessionHistory = sessionHistoryStore.add(session)
         }
     }
@@ -117,11 +122,14 @@ final class WaveGeneratorViewModel: ObservableObject {
     func startPlayback() {
         guard !isPlaying, !isApplyingSettings, !isQueueSaturated else { return }
 
+        let timeline = audioEngine.timelineSnapshot()
+        let transitionFrameCount = audioEngine.durationFrames(for: transitionSeconds)
         guard audioEngine.startTone(rampSeconds: transitionSeconds) else { return }
 
         sessionRecorder.beginSession(
             initialSettings: currentSettingsSnapshot(),
-            transitionSeconds: transitionSeconds
+            timeline: timeline,
+            transitionFrameCount: transitionFrameCount
         )
         isPlaying = true
     }
@@ -140,27 +148,27 @@ final class WaveGeneratorViewModel: ObservableObject {
 
         let carrier = max(200, carrierHz)
         let durationSeconds = isPlaying ? transitionSeconds : 0
-        let accepted = await retryUntilAccepted {
+        let transitionFrameCount = audioEngine.durationFrames(for: durationSeconds)
+        guard let acceptedTimeline = await retryUntilAcceptedWithTimeline({
             audioEngine.applyCarrierHz(
                 carrier,
                 channelIndex: engineChannelIndex(for: channel),
                 durationSeconds: durationSeconds
             )
-        }
+        }) else { return false }
 
-        if accepted {
-            updateSettings(for: channel) { settings in
-                settings.carrierHz = carrier
-            }
-            recordSessionEvent(
-                kind: .carrierChanged,
-                channel: channel,
-                carrierHz: carrier,
-                transitionSeconds: durationSeconds
-            )
+        updateSettings(for: channel) { settings in
+            settings.carrierHz = carrier
         }
+        recordSessionEvent(
+            kind: .carrierChanged,
+            channel: channel,
+            carrierHz: carrier,
+            transitionFrameCount: transitionFrameCount,
+            timeline: acceptedTimeline
+        )
 
-        return accepted
+        return true
     }
 
     func applyPulse(
@@ -194,8 +202,9 @@ final class WaveGeneratorViewModel: ObservableObject {
         let currentPulse = settings.pulses[index]
         let isSilentTuning = currentPulse.volume == 0 && normalizedPulse.volume == currentPulse.volume
         let durationSeconds = isPlaying && !isSilentTuning ? transitionSeconds : 0
+        let transitionFrameCount = audioEngine.durationFrames(for: durationSeconds)
 
-        let accepted = await retryUntilAccepted {
+        guard let acceptedTimeline = await retryUntilAcceptedWithTimeline({
             audioEngine.applyPulse(
                 at: index,
                 channelIndex: engineChannelIndex(for: channel),
@@ -204,28 +213,27 @@ final class WaveGeneratorViewModel: ObservableObject {
                 volume: normalizedPulse.volume,
                 durationSeconds: durationSeconds
             )
-        }
+        }) else { return false }
 
-        if accepted {
-            updateSettings(for: channel) { settings in
-                settings.pulses = normalizedPulses
-                settings.selectedPulseID = normalizedPulses.contains(where: { $0.id == id })
-                    ? id
-                    : normalizedPulses.first?.id
-            }
-            recordSessionEvent(
-                kind: .pulseChanged,
-                channel: channel,
-                pulseID: id,
-                pulseIndex: index,
-                frequency: normalizedPulse.frequency,
-                wetness: normalizedPulse.wetness,
-                volume: normalizedPulse.volume,
-                transitionSeconds: durationSeconds
-            )
+        updateSettings(for: channel) { settings in
+            settings.pulses = normalizedPulses
+            settings.selectedPulseID = normalizedPulses.contains(where: { $0.id == id })
+                ? id
+                : normalizedPulses.first?.id
         }
+        recordSessionEvent(
+            kind: .pulseChanged,
+            channel: channel,
+            pulseID: id,
+            pulseIndex: index,
+            frequency: normalizedPulse.frequency,
+            wetness: normalizedPulse.wetness,
+            volume: normalizedPulse.volume,
+            transitionFrameCount: transitionFrameCount,
+            timeline: acceptedTimeline
+        )
 
-        return accepted
+        return true
     }
 
     func addPulse(to channel: WaveChannel) async -> Bool {
@@ -240,7 +248,7 @@ final class WaveGeneratorViewModel: ObservableObject {
             volume: 0
         )
 
-        let accepted = await retryUntilAccepted {
+        guard let acceptedTimeline = await retryUntilAcceptedWithTimeline({
             audioEngine.addPulse(
                 channelIndex: engineChannelIndex(for: channel),
                 frequency: newPulse.frequency,
@@ -248,26 +256,25 @@ final class WaveGeneratorViewModel: ObservableObject {
                 targetVolume: newPulse.volume,
                 durationSeconds: 0
             )
-        }
+        }) else { return false }
 
-        if accepted {
-            updateSettings(for: channel) { settings in
-                settings.pulses = Self.normalizedPulses(settings.pulses + [newPulse])
-                settings.selectedPulseID = newPulse.id
-            }
-            recordSessionEvent(
-                kind: .pulseAdded,
-                channel: channel,
-                pulseID: newPulse.id,
-                pulseIndex: settings.pulses.count,
-                frequency: newPulse.frequency,
-                wetness: newPulse.wetness,
-                volume: newPulse.volume,
-                transitionSeconds: 0
-            )
+        updateSettings(for: channel) { settings in
+            settings.pulses = Self.normalizedPulses(settings.pulses + [newPulse])
+            settings.selectedPulseID = newPulse.id
         }
+        recordSessionEvent(
+            kind: .pulseAdded,
+            channel: channel,
+            pulseID: newPulse.id,
+            pulseIndex: settings.pulses.count,
+            frequency: newPulse.frequency,
+            wetness: newPulse.wetness,
+            volume: newPulse.volume,
+            transitionFrameCount: 0,
+            timeline: acceptedTimeline
+        )
 
-        return accepted
+        return true
     }
 
     func removeSelectedPulse(from channel: WaveChannel) async -> Bool {
@@ -281,22 +288,22 @@ final class WaveGeneratorViewModel: ObservableObject {
         defer { isApplyingSettings = false }
 
         let durationSeconds = isPlaying ? transitionSeconds : 0
-        let accepted = await retryUntilAccepted {
+        let transitionFrameCount = audioEngine.durationFrames(for: durationSeconds)
+        guard let acceptedTimeline = await retryUntilAcceptedWithTimeline({
             audioEngine.removePulse(
                 at: index,
                 channelIndex: engineChannelIndex(for: channel),
                 durationSeconds: durationSeconds
             )
-        }
-
-        guard accepted else { return false }
+        }) else { return false }
 
         recordSessionEvent(
             kind: .pulseRemoved,
             channel: channel,
             pulseID: pulse.id,
             pulseIndex: index,
-            transitionSeconds: durationSeconds
+            transitionFrameCount: transitionFrameCount,
+            timeline: acceptedTimeline
         )
 
         if durationSeconds > 0 {
@@ -374,6 +381,19 @@ final class WaveGeneratorViewModel: ObservableObject {
         }
 
         return false
+    }
+
+    private func retryUntilAcceptedWithTimeline(_ apply: () -> Bool) async -> WaveAudioTimelineSnapshot? {
+        while !Task.isCancelled {
+            let timeline = audioEngine.timelineSnapshot()
+            if apply() {
+                return timeline
+            }
+
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        return nil
     }
 
     private func channelSettings(for channel: WaveChannel) -> WaveChannelSettings {
@@ -512,7 +532,8 @@ final class WaveGeneratorViewModel: ObservableObject {
         frequency: Double? = nil,
         wetness: Double? = nil,
         volume: Double? = nil,
-        transitionSeconds: Double? = nil
+        transitionFrameCount: Int64? = nil,
+        timeline: WaveAudioTimelineSnapshot
     ) {
         sessionRecorder.record(
             kind: kind,
@@ -523,7 +544,8 @@ final class WaveGeneratorViewModel: ObservableObject {
             frequency: frequency,
             wetness: wetness,
             volume: volume,
-            transitionSeconds: transitionSeconds
+            transitionFrameCount: transitionFrameCount,
+            timeline: timeline
         )
     }
 
