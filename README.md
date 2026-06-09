@@ -53,7 +53,7 @@ So `volume = 0` means "this pulse has no effect" and `volume = 1` means "use the
 output(t) = masterGain(t) * carrier(t) * product(pulseContribution[i](t))
 ```
 
-The carrier is always present and is clamped to at least `200 Hz`. Pulse frequencies are independent and editable in the `0...5 Hz` range. Final samples are clamped to `-1...1` before output.
+The carrier is always present and is clamped to at least `200 Hz`. Pulse frequencies are independent and editable in the `0...5 Hz` range. (If a pulse frequency is zero, that just means it outputs the carrier frequency as a constant tone.) Final samples are clamped to `-1...1` before output.
 
 ## Why changes stay smooth
 
