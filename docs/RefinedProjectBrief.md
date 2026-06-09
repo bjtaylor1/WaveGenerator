@@ -36,8 +36,7 @@ Refinements:
 ## Potential Issues and Mitigations
 1. Real-time thread safety
 - Risk: locking/allocating in render callback can cause glitches.
-- MVP mitigation: keep render path simple; queue control events outside callback; no per-sample allocation.
-- Production: lock-free ring buffer for control messages.
+- Current mitigation: keep render path simple; queue control events through a fixed-size lock-free command queue; avoid per-sample allocation.
 
 2. Zipper noise from coarse control updates
 - Risk: updating params at UI tick rate introduces stepping.
@@ -51,17 +50,17 @@ Refinements:
 - Risk: heavy per-sample math for many layers.
 - Mitigation: scale with vectorized math / bounded layer count later.
 
-## Suggested Architecture
+## Current Architecture
 - `WaveAudioEngine`
   - Owns `AVAudioEngine`, `AVAudioSourceNode`, render state, command queue.
 - `RampedParameter`
   - Encapsulates one active linear modifier at a time.
 - `RenderState`
-  - Oscillator phase, frame counter, parameters; pure sample generation.
-- `WaveViewModel`
+  - Holds sample rate, frame position, master gain, stereo flag, and channel component state.
+- `WaveGeneratorViewModel`
   - UI-facing state and validation; schedules transitions to engine.
-- `SessionStore` (later)
-  - Append completed modifiers to JSONL for playback/reconstruction.
+- `WaveSessionHistoryStore`
+  - Retains the most recent compact session timelines for replay, export, and offline rendering.
 
 ## Layering Roadmap
 - Carrier is mandatory and cannot be deleted.
@@ -76,10 +75,11 @@ Refinements:
 - Smooth carrier/pulse/wetness changes through timeline modifiers.
 - Carrier minimum clamp at 200 Hz.
 - Dynamic pulse add/remove with ramped pulse contribution.
-- Save completed playback sessions as compact action timelines that can be exported from history.
+- Save completed playback sessions as compact action timelines that can be replayed, exported from history, or rendered offline to WAV.
+- Load exported JSON session files, validate them, play them back, and render them to WAV.
 - Each pulse keeps a direct frequency editor with a `0...5 Hz` range.
 
 ## Deferred from POC
-- Session replay UI.
-- Real-time safe lock-free control queue.
+- Broader session editing UI beyond replay/export/render.
+- More advanced export/analysis tools beyond WAV rendering.
 - Disable controls while active transition (optional UX policy).
