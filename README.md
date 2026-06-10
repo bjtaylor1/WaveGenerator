@@ -1,6 +1,6 @@
 # Wave generator
 
-Wave generator is an iOS app for continuously synthesizing a smooth sine carrier with one or more low-frequency pulse envelopes. It is designed around one practical rule: changing a sound parameter while audio is running should not create a click, jolt, phase reset, or abrupt level step.
+Wave generator is an iOS app for continuously synthesizing a smooth audio tone with one or more pulse envelopes. It is designed around one practical rule: changing a sound parameter while audio is running should not create a click, jolt, phase reset, or abrupt level step.
 
 The app is aimed at people who are comfortable with audio concepts such as carrier frequency, envelopes, modulation depth, ramps, stereo channels, and rendered WAV files. You do not need to know the codebase to understand or use the app.
 
